@@ -10,13 +10,12 @@ readme = "README.md"
 requires-python = ">=3.11"
 license = { text = "MIT" }
 
-# The agent loop, the tool contract, tracing, the chaos middleware and the
-# scorer are stdlib-only. That is deliberate: `make test` has to work on a
-# fresh clone before anyone runs pip install, and a reliability harness whose
-# own dependencies can fail is measuring the wrong thing.
+# The agent loop, the tool contract, tracing, the chaos middleware, the scorer
+# and the task suite are stdlib-only. That is deliberate: `make test` has to
+# work on a fresh clone before anyone runs pip install, and a reliability
+# harness whose own dependencies can fail is measuring the wrong thing.
 #
-# Only two things need anything at all: reading the Gazette PDFs (pypdf) and
-# calling a model (anthropic). Both are extras.
+# Everything below is an extra, and each one names what it costs.
 dependencies = []
 
 [project.optional-dependencies]
@@ -33,6 +32,12 @@ gazette = ["pypdf>=5.0"]
 # extra takes on the AGPL obligation; that is their decision to make knowingly
 # rather than one inherited from a requirements file.
 ingest = ["pymupdf>=1.24"]
+
+# Optional Postgres/pgvector backend. The agent never imports it: it depends on
+# agent.retrieval_service.RetrievalService, and storage/ implements that. With
+# no DATABASE_URL the repository is a no-op and retrieval uses the in-memory
+# index, so this changes deployment rather than architecture.
+storage = ["psycopg[binary]>=3.1"]
 
 # The default model path — NVIDIA's API catalog, and a self-hosted NIM
 # container on the same wire format — needs NOTHING. It is one POST with a JSON
@@ -53,15 +58,14 @@ eval = [
 
 dev = ["pytest>=8.0", "ruff>=0.6"]
 
-# Everything, for a full adversarial run.
 # Everything, for a full adversarial run. Note this pulls in the AGPL-3.0
 # ingest extra; use the named extras instead if that matters to you.
 all = [
-    "gst-resilient-agent[gazette,ingest,anthropic,mcp,eval,dev]",
+    "gst-resilient-agent[gazette,ingest,storage,anthropic,mcp,eval,dev]",
 ]
 
 [tool.setuptools.packages.find]
-include = ["agent*", "chaos*", "suite*", "mcp_gazette*"]
+include = ["agent*", "chaos*", "suite*", "mcp_gazette*", "storage*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
