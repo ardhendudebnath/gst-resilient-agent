@@ -1,0 +1,30 @@
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+.venv/
+venv/
+.pytest_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Real keys never enter the repo. .env.example carries the shape.
+.env
+
+# Traces are run artefacts: large, machine-written, and regenerable. The ones
+# that back a published number are committed deliberately, under traces/pinned/.
+traces/*.jsonl
+traces/*.json
+!traces/pinned/
+!traces/.gitkeep
+
+# Chaos-run outputs. Same rule: results/pinned/ is committed, the rest is not.
+results/*.json
+!results/pinned/
+!results/.gitkeep
+
+.DS_Store
+Thumbs.db

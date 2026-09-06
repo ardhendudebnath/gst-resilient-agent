@@ -1,0 +1,55 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "gst-resilient-agent"
+version = "0.1.0"
+description = "A multi-step GST rate-opinion agent, and the chaos testing that measures where it breaks"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+
+# The agent loop, the tool contract, tracing, the chaos middleware and the
+# scorer are stdlib-only. That is deliberate: `make test` has to work on a
+# fresh clone before anyone runs pip install, and a reliability harness whose
+# own dependencies can fail is measuring the wrong thing.
+#
+# Only two things need anything at all: reading the Gazette PDFs (pypdf) and
+# calling a model (anthropic). Both are extras.
+dependencies = []
+
+[project.optional-dependencies]
+# Tools 3 and 5 read the archived notifications, which are PDFs.
+gazette = ["pypdf>=5.0"]
+
+# Tool 7 is the only one that calls a model.
+models = ["anthropic>=0.40"]
+
+# The MCP server, and the client the agent uses to reach it.
+mcp = ["mcp>=1.2"]
+
+# Project 01, pinned. Supplies the scorer, the label space and the Gazette
+# lookup. Install a local checkout with `pip install -e ../domain-eval-harness`
+# instead when working on both at once.
+eval = [
+    "gst-eval-harness @ git+https://github.com/ardhendudebnath/gst-eval-harness@096acedff9e8792b4240062b2c7c5c4b44b05f64",
+]
+
+dev = ["pytest>=8.0", "ruff>=0.6"]
+
+# Everything, for a full adversarial run.
+all = [
+    "gst-resilient-agent[gazette,models,mcp,eval,dev]",
+]
+
+[tool.setuptools.packages.find]
+include = ["agent*", "chaos*", "suite*", "mcp_gazette*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"

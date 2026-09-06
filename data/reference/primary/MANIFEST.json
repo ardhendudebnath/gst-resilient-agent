@@ -1,0 +1,59 @@
+{
+  "_comment": "Primary sources every rate claim in this repository traces to. Verify with: python -m harness.verify_primary",
+  "retrieved": "2026-09-04",
+  "provenance": "Retrieved from the taxo.online mirror. The official CBIC portal (taxinformation.cbic.gov.in) serves an incomplete TLS certificate chain, so it could not be fetched over a verified connection, and bypassing verification for documents whose integrity is the point would be self-defeating. The copies are pinned by SHA-256 and their content is asserted below; see rate_schedule.md for what remains open.",
+  "official_urls": {
+    "09-2025-CTR.pdf": "https://taxinformation.cbic.gov.in/viewpdf/1010436/ENG/Notifications",
+    "10-2025-CTR.pdf": "https://taxinformation.cbic.gov.in/viewpdf/1010437/ENG/Notifications"
+  },
+  "documents": [
+    {
+      "file": "09-2025-CTR.pdf",
+      "title": "Notification 9/2025-Central Tax (Rate)",
+      "dated": "2025-09-17",
+      "in_force_from": "2025-09-22",
+      "gazette": "G.S.R. 641(E)",
+      "effect": "Supersedes 1/2017-CT(R). Rated goods, Schedules I-VII.",
+      "must_contain": [
+        "Schedule I",
+        "Schedule II",
+        "9608",
+        "Wheat or meslin flour, pre-packaged and labelled",
+        "Motorcycles of engine capacity exceeding 350 cc",
+        "Candles, tapers and the like"
+      ],
+      "bytes": 1306612,
+      "sha256": "a750d020495f8fda5f8de53e56e3e8aaa707f0ccf7aa674681468b013f42e1d3",
+      "pages": 52
+    },
+    {
+      "file": "10-2025-CTR.pdf",
+      "title": "Notification 10/2025-Central Tax (Rate)",
+      "dated": "2025-09-17",
+      "in_force_from": "2025-09-22",
+      "effect": "Supersedes 2/2017-CT(R). Exempt (nil-rated) goods.",
+      "must_contain": [
+        "2501",
+        "other than pre-packaged and labelled"
+      ],
+      "bytes": 659936,
+      "sha256": "2fa488ae1001ddbce36b51c9c5e2acfb439195c4fe49703590bd03e767f530f6",
+      "pages": 12
+    },
+    {
+      "file": "19-2025-CTR.pdf",
+      "title": "Notification 19/2025-Central Tax (Rate)",
+      "dated": "2025-12-31",
+      "in_force_from": "2026-02-01",
+      "effect": "Amends 9/2025. Omits Schedule VII; tobacco to Schedule III, biris to Schedule II.",
+      "must_contain": [
+        "19/2025",
+        "Biris",
+        "shall be omitted"
+      ],
+      "bytes": 448914,
+      "sha256": "a380b42dcc7f359db19fed05060ba6569610c5c92d6356a3c50fcdb2c6b05a60",
+      "pages": 2
+    }
+  ]
+}
