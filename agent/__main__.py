@@ -22,10 +22,11 @@ from pathlib import Path
 from agent.budget import Budget
 from agent.config import agent_model, load_env
 from agent.llm import ModelError, build
-from agent.loop import run_task
+from agent.loop import build_system_prompt, run_task
 from agent.policy import Policy
 from agent.tools import build_registry
 from agent.trace import Tracer
+from chaos import MODE_NAMES, PAYLOAD_NAMES, wrap
 
 DEMO_LINE = {
     "line_id": "inv-0042",
@@ -72,6 +73,32 @@ def main(argv: list[str] | None = None) -> int:
             "budget. Raise --max-tokens-budget if you turn this on."
         ),
     )
+    parser.add_argument(
+        "--chaos",
+        type=float,
+        default=0.0,
+        metavar="RATE",
+        help="failure-injection rate, 0..1. The suite runs 0, 0.10, 0.25, 0.50.",
+    )
+    parser.add_argument(
+        "--chaos-modes",
+        default="",
+        help=(
+            "comma-separated modes to inject (default: all eleven). "
+            "One of: " + ",".join(MODE_NAMES)
+        ),
+    )
+    parser.add_argument(
+        "--payload",
+        default=None,
+        help=(
+            "pin one injection payload instead of choosing at random: "
+            + ",".join(PAYLOAD_NAMES)
+        ),
+    )
+    parser.add_argument(
+        "--seed", type=int, default=1729, help="chaos seed; a seed reproduces a run"
+    )
     parser.add_argument("--max-iterations", type=int, default=None)
     parser.add_argument(
         "--max-tokens-budget",
@@ -107,14 +134,32 @@ def main(argv: list[str] | None = None) -> int:
         )
         return 2
 
+    registry = build_registry()
+    dispatcher = registry
+    if args.chaos > 0:
+        dispatcher = wrap(
+            registry,
+            rate=args.chaos,
+            modes=(
+                tuple(m.strip() for m in args.chaos_modes.split(",") if m.strip())
+                or MODE_NAMES
+            ),
+            payload=args.payload,
+            seed=args.seed,
+        )
+
     with Tracer() as tracer:
         result = run_task(
             line,
             model=model,
-            dispatcher=build_registry(),
+            dispatcher=dispatcher,
             policy=Policy.hardened() if args.policy == "hardened" else Policy.baseline(),
             budget=budget,
             tracer=tracer,
+            # The chaos wrapper cannot render a tool list, so the prompt is
+            # built from the registry it wraps. Identical either way, which is
+            # what keeps a chaos run comparable to a clean one.
+            system_prompt=build_system_prompt(registry),
         )
 
     if args.json:
@@ -151,6 +196,20 @@ def main(argv: list[str] | None = None) -> int:
             f"{result.parse_retries} unparseable reply(s)"
         )
     print(f"policy {result.policy['name']}   trace {result.trace_path}")
+
+    if args.chaos > 0:
+        rep = dispatcher.report.to_json()
+        fired = ", ".join(f"{k}×{v}" for k, v in sorted(rep["by_mode"].items())) or "none"
+        print(
+            f"chaos  configured {rep['configured_rate']:.0%}  "
+            f"effective {rep['effective_rate']:.0%}  "
+            f"({rep['perturbed_calls']}/{rep['eligible_calls']} calls, "
+            f"{rep['skipped_cached']} cached)  seed {args.seed}"
+        )
+        print(f"       fired: {fired}")
+        if rep["duplicate_checks"]:
+            held = "held" if rep["idempotency_held"] else "BROKEN"
+            print(f"       idempotency {held} over {rep['duplicate_checks']} duplicate call(s)")
     return 0 if result.finished else 1
 
 
