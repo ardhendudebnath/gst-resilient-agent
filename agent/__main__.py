@@ -137,6 +137,19 @@ def main(argv: list[str] | None = None) -> int:
         f"tokens {result.ledger['tokens_in']}+{result.ledger['tokens_out']}  "
         f"{result.ledger['elapsed_s']}s"
     )
+    if result.justification_source == "template":
+        print(
+            "note: the justification is the deterministic template — tool 7's "
+            "model call did not succeed. The determination above is unaffected."
+        )
+    if result.model_retries or result.parse_retries:
+        # Surfaced rather than buried: a run that quietly absorbed six provider
+        # failures is not the same run as one that absorbed none, and a suite
+        # whose numbers move with the endpoint's mood is measuring the endpoint.
+        print(
+            f"recovered from {result.model_retries} provider failure(s), "
+            f"{result.parse_retries} unparseable reply(s)"
+        )
     print(f"policy {result.policy['name']}   trace {result.trace_path}")
     return 0 if result.finished else 1
 

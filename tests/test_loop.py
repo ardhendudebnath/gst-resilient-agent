@@ -17,7 +17,11 @@ import pytest
 from agent.budget import Budget
 from agent.llm import ScriptedModel
 from agent.loop import (
+    BACKOFF_BASE_S,
+    BACKOFF_CAP_S,
+    MAX_MODEL_RETRIES,
     RunState,
+    _backoff,
     build_system_prompt,
     check_prerequisites,
     parse_action,
@@ -193,12 +197,93 @@ def test_persistent_unparseable_replies_end_the_run():
     assert result.reason.startswith("unparseable_replies")
 
 
-def test_repeated_model_errors_end_the_run_distinctly():
-    """A provider outage is not the agent giving up, and must not read as it."""
+def test_a_non_transient_model_error_stops_immediately():
+    """Retrying a 401 or a bad request reaches the same failure more slowly."""
     result, _, _ = run([])  # ScriptedModel errors immediately when exhausted
     assert result.terminal == "budget_exhausted"
+    assert result.reason.startswith("model_error")
+    assert result.model_retries == 1  # tried once, did not retry
+    assert result.steps == 0
+
+
+class FlakyModel:
+    """Returns `failures` transient errors, then plays the script.
+
+    Models the 503 behaviour actually observed against
+    nemotron-3-ultra-550b-a55b, where an eight-step run met three of them.
+    """
+
+    provider = "flaky"
+    model = "flaky"
+
+    def __init__(self, failures: int, responses: list[str], error: str = "http_503: overloaded"):
+        self._left = failures
+        self._inner = ScriptedModel(responses)
+        self._error = error
+        self.attempts = 0
+
+    def complete(self, system, messages):
+        self.attempts += 1
+        if self._left > 0:
+            self._left -= 1
+            from agent.llm import Completion
+
+            return Completion(text="", model=self.model, provider=self.provider,
+                              error=self._error)
+        return self._inner.complete(system, messages)
+
+
+def _run_with(model, *, policy=None, budget=None):
+    tracer = Tracer(memory_only=True)
+    result = run_task(
+        LINE,
+        model=model,
+        dispatcher=build_registry(),
+        policy=policy or Policy.baseline(),
+        budget=budget,
+        tracer=tracer,
+    )
+    return result, tracer
+
+
+def test_transient_provider_failures_do_not_consume_iterations(monkeypatch):
+    """The bug this fixes: three 503s in an eight-step run consumed three of
+    twelve iterations, so a longer line would have ended in budget_exhausted —
+    recording an infrastructure failure as the agent giving up."""
+    monkeypatch.setattr("agent.loop.time.sleep", lambda _s: None)
+    model = FlakyModel(3, HAPPY_PATH)
+    result, tracer = _run_with(model)
+
+    assert result.terminal == "opinion"
+    assert result.steps == 6, "the 503s must not be charged as reasoning steps"
+    assert result.model_retries == 3
+    assert model.attempts == 9  # 3 failures + 6 real turns
+
+    notes = [e for e in tracer.events if e["event"] == "note"]
+    retries = [e for e in notes if "transient" in e.get("note", "")]
+    assert len(retries) == 3
+    assert all(e.get("backoff_s", 0) >= 0 for e in retries)
+
+
+def test_a_sustained_outage_ends_the_run_as_unavailable(monkeypatch):
+    monkeypatch.setattr("agent.loop.time.sleep", lambda _s: None)
+    result, _ = _run_with(FlakyModel(99, HAPPY_PATH))
+    assert result.terminal == "budget_exhausted"
     assert result.reason.startswith("model_unavailable")
-    assert result.steps <= 3  # bailed early rather than burning every iteration
+    assert result.steps == 0
+    assert result.model_retries == MAX_MODEL_RETRIES + 1
+
+
+def test_backoff_grows_and_is_jittered():
+    """Jitter is not decoration: a suite runs many tasks against one endpoint,
+    and synchronised retries keep an overloaded service overloaded."""
+    first = [_backoff(1) for _ in range(20)]
+    later = [_backoff(4) for _ in range(20)]
+    assert min(first) > 0
+    assert max(first) <= BACKOFF_BASE_S
+    assert sum(later) / len(later) > sum(first) / len(first)
+    assert max(_backoff(50) for _ in range(20)) <= BACKOFF_CAP_S
+    assert len(set(first)) > 1, "identical delays mean no jitter"
 
 
 def test_a_json_object_inside_a_code_fence_is_accepted():

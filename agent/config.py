@@ -110,22 +110,35 @@ def max_run_usd() -> float:
 #: changes under the same name, so every result file records the id actually
 #: used.
 #:
-#: The same open-weight model Project 01 benchmarked, served through NVIDIA's
-#: catalog so no GPU is needed. Three reasons it is the default rather than a
-#: frontier model:
+#: Open weights at frontier scale, served through NVIDIA's catalog so no GPU is
+#: needed. Chosen because the agent's job is multi-step reasoning over tool
+#: output, which is where the capability gap between 120B and 550B actually
+#: shows up: the failure this project keeps hitting is not arithmetic but
+#: judgement — reading a schedule entry and deciding whether it describes these
+#: goods.
 #:
-#:   - the two projects' numbers stay comparable, and Project 01 already
-#:     measured this model reciting an abolished rate in 18.3% of single calls,
-#:     which is the behaviour the agent is supposed to fix;
-#:   - it has a published NIM container, so "you could self-host this" is
-#:     demonstrable rather than asserted — the bridge to Project 03;
-#:   - chaos testing means hundreds of runs, and the brief names the surprise
-#:     API bill as a pitfall.
+#: **The trade this makes, stated rather than buried.** Project 01 deliberately
+#: did *not* use 550B for its open-weight row, on the grounds that nobody is
+#: self-hosting 550B. Making it the default here costs two things:
+#:
+#:   - the self-hostability demonstration. `nemotron-3-super-120b-a12b` has a
+#:     published NIM container and runs on one node; this does not.
+#:   - the clean bridge to Project 03, whose whole point is running the same
+#:     model on a rented GPU and pricing it.
+#:
+#: Both are recoverable: the wire format is identical, so `--model
+#: nvidia/nemotron-3-super-120b-a12b` reproduces every run against the
+#: self-hostable model, and Project 03 should use that id. Any published
+#: comparison should report both rows rather than only the stronger one.
 #:
 #: Hosted model ids get retired: Project 01's original pick returned "410 Gone:
 #: reached its end of life" on its first live call. Expect to change this, and
 #: verify a successor by calling it rather than by reading a docs page.
-DEFAULT_MODEL = "nvidia/nemotron-3-super-120b-a12b"
+DEFAULT_MODEL = "nvidia/nemotron-3-ultra-550b-a55b"
+
+#: The self-hostable sibling. Same wire format, same reasoning switch — the
+#: only difference is the id, which is what keeps the Project 03 bridge open.
+SELF_HOSTABLE_MODEL = "nvidia/nemotron-3-super-120b-a12b"
 
 
 def agent_model() -> str:

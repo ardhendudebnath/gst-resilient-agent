@@ -41,18 +41,34 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+import time
 from dataclasses import dataclass, field
 from typing import Any, Protocol
 
 from agent.budget import Budget, Ledger
 from agent.contract import ToolCall, ToolResult
-from agent.llm import Message, Model
+from agent.llm import (
+    BACKOFF_BASE_S,
+    BACKOFF_CAP_S,
+    Message,
+    Model,
+    backoff_delay,
+    is_transient,
+)
 from agent.policy import Policy
 from agent.registry import IdempotencyCache, Registry, build_call
 from agent.render import render_line_item, render_tool_result
 from agent.trace import Tracer
 
-MAX_CONSECUTIVE_MODEL_ERRORS = 2
+#: How many transient provider failures one run tolerates before giving up.
+#: Generous because the failures are not the agent's and each one is cheap; the
+#: wall-clock bound is what actually stops a run against a dead endpoint.
+MAX_MODEL_RETRIES = 5
+
+# Re-exported so the loop's own retry policy reads in one place. The schedule
+# itself lives beside `is_transient` in agent/llm.py, because tool 7 retries on
+# the same terms and two backoff schedules would drift.
+_backoff = backoff_delay
 
 
 class Dispatcher(Protocol):
@@ -330,6 +346,16 @@ class RunResult:
     tool_calls: list[dict[str, Any]] = field(default_factory=list)
     trace_path: str | None = None
     model: str = ""
+    #: Transient provider failures survived during this run. Reported because
+    #: a suite whose runs are quietly absorbing 503s is measuring something
+    #: other than the agent, and the number is the only way to notice.
+    model_retries: int = 0
+    #: Malformed model replies corrected during this run.
+    parse_retries: int = 0
+    #: "model" or "template". A templated justification means tool 7's model
+    #: call failed; the run is still valid but its prose is not the model's,
+    #: and anything scoring the prose has to be able to exclude it.
+    justification_source: str | None = None
 
     @property
     def finished(self) -> bool:
@@ -348,6 +374,9 @@ class RunResult:
             "tool_calls": self.tool_calls,
             "trace_path": self.trace_path,
             "model": self.model,
+            "model_retries": self.model_retries,
+            "parse_retries": self.parse_retries,
+            "justification_source": self.justification_source,
         }
 
 
@@ -397,8 +426,9 @@ def run_task(
     terminal = "budget_exhausted"
     reason: str | None = None
     opinion: dict[str, Any] | None = None
+    justification_source: str | None = None
     parse_retries = 0
-    consecutive_model_errors = 0
+    model_errors = 0
 
     def finish() -> RunResult:
         tracer.run_end(
@@ -423,6 +453,9 @@ def run_task(
             ],
             trace_path=str(tracer.path) if tracer.path else None,
             model=getattr(model, "model", "?"),
+            model_retries=model_errors,
+            parse_retries=parse_retries,
+            justification_source=justification_source,
         )
         if owns_tracer:
             tracer.close()
@@ -432,8 +465,7 @@ def run_task(
         if broke := ledger.exceeded():
             reason = broke
             return finish()
-        ledger.note_iteration()
-        step = ledger.iterations
+        step = ledger.iterations + 1
 
         tracer.emit(
             "llm_call", step=step, messages=len(messages), tokens_so_far=ledger.tokens
@@ -453,16 +485,38 @@ def run_task(
         )
 
         if not completion.ok:
-            consecutive_model_errors += 1
-            if consecutive_model_errors > MAX_CONSECUTIVE_MODEL_ERRORS:
-                # Not the agent's failure, and not worth burning the remaining
-                # iterations on. Reported distinctly so it is never mistaken for
-                # the agent giving up.
+            # A provider failure is not a reasoning step, and charging it as one
+            # was a real bug: three 503s in an eight-step run against
+            # nemotron-3-ultra-550b consumed three of twelve iterations, and a
+            # longer line would have ended in `budget_exhausted` — recording an
+            # infrastructure failure as the agent giving up. Worse, once week 4
+            # starts injecting failures, an organic 503 counted the same way
+            # would be indistinguishable from an injected one in the results.
+            #
+            # So transient model errors are retried with backoff, bounded by
+            # their own counter and by the wall clock, and never charged to
+            # `iterations`. They are counted separately and reported on the run.
+            model_errors += 1
+            if not is_transient(completion.error):
+                reason = f"model_error: {completion.error}"
+                return finish()
+            if model_errors > MAX_MODEL_RETRIES:
                 reason = f"model_unavailable: {completion.error}"
                 return finish()
-            tracer.emit("note", step=step, note="model call failed; retrying")
+            delay = _backoff(model_errors)
+            tracer.emit(
+                "note",
+                step=step,
+                note="transient model failure; retrying",
+                error=completion.error,
+                attempt=model_errors,
+                backoff_s=round(delay, 2),
+            )
+            time.sleep(delay)
             continue
-        consecutive_model_errors = 0
+
+        # Only now has a reasoning step actually happened.
+        ledger.note_iteration()
 
         action, problem = parse_action(completion.text)
         messages.append(Message("assistant", completion.text))
@@ -519,4 +573,5 @@ def run_task(
             opinion = result.data.get("opinion")
             terminal = str(result.data.get("terminal") or "opinion")
             reason = (opinion or {}).get("reason")
+            justification_source = result.data.get("justification_source")
             return finish()

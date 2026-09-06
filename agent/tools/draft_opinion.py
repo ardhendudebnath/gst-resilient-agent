@@ -41,10 +41,18 @@ from __future__ import annotations
 
 from datetime import date
 
+import time
+
 from agent.contract import ToolResult
-from agent.llm import Message, Model, ModelError
+from agent.llm import Message, Model, ModelError, backoff_delay, is_transient
 from agent.opinion import Citation, Opinion, validate
 from agent.registry import ToolSpec
+
+#: Transient provider failures tolerated while drafting. Lower than the loop's
+#: budget: this is one call at the very end of a run whose wall clock is
+#: already mostly spent, and the template fallback is a real answer rather than
+#: a failure.
+MAX_DRAFT_RETRIES = 2
 
 _MODEL: Model | None = None
 _MODEL_RESOLVED = False
@@ -182,6 +190,8 @@ def draft_opinion(
         )
 
     source = "template"
+    retries = 0
+    last_error: str | None = None
     model = _model()
     if model is not None:
         determination = "\n".join(
@@ -193,13 +203,25 @@ def draft_opinion(
             determination += f"\ndeclared_rate: {declared_rate}"
         if notes:
             determination += f"\nagent_notes: {notes[:600]}"
-        completion = model.complete(
-            _DRAFT_SYSTEM,
-            [Message(role="user", content=f"Determination:\n{determination}")],
-        )
-        if completion.ok and completion.text.strip():
-            op.justification = completion.text.strip()
-            source = "model"
+        message = [Message(role="user", content=f"Determination:\n{determination}")]
+
+        # Retried on the same terms as the loop. Falling straight back to the
+        # template on a 503 was a real defect: a suite would silently mix
+        # model-written and templated justifications depending on the
+        # endpoint's mood, which is an uncontrolled variable in anything that
+        # scores the prose. Observed against nemotron-3-ultra-550b, where one
+        # run in four degraded this way.
+        for attempt in range(1, MAX_DRAFT_RETRIES + 2):
+            completion = model.complete(_DRAFT_SYSTEM, message)
+            if completion.ok and completion.text.strip():
+                op.justification = completion.text.strip()
+                source = "model"
+                break
+            last_error = completion.error or "empty_response"
+            if not is_transient(last_error) or attempt > MAX_DRAFT_RETRIES:
+                break
+            retries += 1
+            time.sleep(backoff_delay(attempt))
 
     if source == "template":
         op.justification = _template(op, declared_rate)
@@ -219,7 +241,12 @@ def draft_opinion(
         {
             "opinion": op.to_json(),
             "terminal": op.terminal,
+            # Never inferred from the prose. A run that fell back to the
+            # template is a different run from one that did not, and any
+            # scoring of the justification has to be able to exclude it.
             "justification_source": source,
+            "draft_retries": retries,
+            "draft_error": last_error if source == "template" else None,
             "validated": True,
         }
     )

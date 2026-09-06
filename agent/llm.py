@@ -33,6 +33,7 @@ from __future__ import annotations
 
 import json
 import os
+import random
 import time
 import urllib.error
 import urllib.request
@@ -110,6 +111,58 @@ class Model(Protocol):
 
 class ModelError(RuntimeError):
     """A configuration problem — a missing key, an unknown model."""
+
+
+#: Error prefixes that mean "the same call may succeed shortly". Everything
+#: else — 401, 400, 404 — is a configuration problem that retrying cannot fix,
+#: and retrying it would burn the run's wall clock to reach the same failure.
+#:
+#: 503 is on this list because it is the failure this project actually meets:
+#: `nemotron-3-ultra-550b-a55b` returns "Service temporarily overloaded" often
+#: enough that a single 8-step run hit it three times.
+TRANSIENT_ERROR_MARKERS: tuple[str, ...] = (
+    "http_408",
+    "http_409",
+    "http_429",
+    "http_500",
+    "http_502",
+    "http_503",
+    "http_504",
+    "http_529",
+    "TimeoutError",
+    "timed out",
+    "URLError",
+    "ConnectionError",
+    "ConnectionReset",
+    "RemoteDisconnected",
+    "IncompleteRead",
+    "empty_response",
+)
+
+
+def is_transient(error: str | None) -> bool:
+    """Could this identical call plausibly succeed if repeated?"""
+    if not error:
+        return False
+    return any(marker in error for marker in TRANSIENT_ERROR_MARKERS)
+
+
+#: Backoff between retries, seconds. Capped low on purpose: a run's wall clock
+#: keeps ticking through a sleep, so a textbook exponential schedule would spend
+#: the whole 120 s budget waiting rather than working.
+BACKOFF_BASE_S = 0.75
+BACKOFF_CAP_S = 6.0
+
+
+def backoff_delay(attempt: int) -> float:
+    """Exponential with jitter, for retry number `attempt` (1-based).
+
+    Jitter matters more than it looks: a suite runs many tasks against one
+    endpoint, and synchronised retries are how a temporarily overloaded service
+    is kept overloaded.
+    """
+    ceiling = min(BACKOFF_BASE_S * (2 ** (attempt - 1)), BACKOFF_CAP_S)
+    return ceiling * (0.5 + random.random() / 2)
 
 
 # --------------------------------------------------------------------------

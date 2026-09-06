@@ -170,12 +170,26 @@ cp .env.example .env    # add NVIDIA_API_KEY
 
 That is the whole install. The default model path is NVIDIA's API catalog,
 reached with one POST over stdlib `urllib`, so no provider SDK is needed —
-`pypdf` for the Gazette PDFs is the only runtime dependency. The model is
-`nvidia/nemotron-3-super-120b-a12b`: the same open-weight model Project 01
-benchmarked, so the two projects' numbers stay comparable, and it has a
-published NIM container, so "you could self-host this" is demonstrable rather
-than asserted. A self-hosted container serves the same wire format, which makes
-`NIM_BASE_URL` the only difference — and the bridge to Project 03.
+`pypdf` for the Gazette PDFs is the only runtime dependency.
+
+The default model is **`nvidia/nemotron-3-ultra-550b-a55b`**, open weights at
+frontier scale. The agent's job is multi-step judgement over tool output —
+reading a schedule entry and deciding whether it describes these goods — which
+is where the gap between 120B and 550B actually shows.
+
+**The trade that makes, stated rather than buried.** Project 01 deliberately did
+*not* use 550B for its open-weight row, on the grounds that nobody self-hosts
+550B. Making it the default here costs the self-hostability demonstration and
+the clean bridge to Project 03. Both are recoverable — the wire format is
+identical, so
+
+```bash
+python -m agent --demo --model nvidia/nemotron-3-super-120b-a12b
+```
+
+reproduces any run against the self-hostable sibling, which has a published NIM
+container and runs on one node. Project 03 should use that id, and any published
+comparison should report both rows rather than only the stronger one.
 
 Run the worked example from `docs/DESIGN.md` §1:
 
@@ -228,6 +242,21 @@ Named specifically, because this section is a feature.
   above. It is left that way rather than tuned: fitting the retriever to one
   example is exactly what the week-3 suite exists to prevent, and a demo that
   passes because it was hand-fitted is worth nothing.
+- **The 550B endpoint returns `503 Service temporarily overloaded` often.**
+  Measured, not impressionistic: an eight-step run met three, and two runs since
+  met two each. The loop retries transient provider failures with jittered
+  backoff and does **not** charge them to the iteration budget — an earlier
+  version did, which would have ended longer lines in `budget_exhausted` and
+  recorded an infrastructure failure as the agent giving up. Every run reports
+  `model_retries` for exactly this reason: a suite quietly absorbing 503s is
+  measuring the endpoint's mood rather than the agent. This needs watching
+  before the chaos suite runs hundreds of tasks, and an organic 503 must never
+  be confusable with an injected one.
+- **Tool 7 falls back to a deterministic template when its model call fails**,
+  and says so via `justification_source`. It retries transient failures first,
+  but a run can still end with templated prose. The determination is unaffected
+  — the numbers come from tools — but anything scoring the justification has to
+  exclude those runs.
 - **All 28 golden rows are `gazette-derived`** — slab read out of the pinned
   notification, heading from each authority's operative ruling, **no human has
   confirmed any of them.** Every accuracy figure inherits that. A before/after
