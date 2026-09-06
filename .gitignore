@@ -28,3 +28,6 @@ results/*.json
 
 .DS_Store
 Thumbs.db
+
+# Embedding index: 7.9 MB of float32, rebuilt from the pinned corpus on demand.
+data/cache/

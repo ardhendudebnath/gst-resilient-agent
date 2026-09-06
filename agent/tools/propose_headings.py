@@ -1,44 +1,45 @@
 """Tool 2 — candidate tariff headings, with their provenance kept separate.
 
-Candidates come from two places, and the difference between them is the most
-important thing this tool returns.
+Candidates come from three places, and keeping them apart is the most important
+thing this tool returns.
+
+**`retrieved`** — headings whose schedule entry matches the description, by
+whichever backend `agent/retrieval.py` is configured to use. Derived from the
+pinned notification, independent of anything the invoice claims.
 
 **`mentioned`** — headings named *in the description itself*. For an advance
 ruling excerpt that is the applicant's own contention, argued in the first
-person and frequently the reason the matter went to an authority at all:
+person and frequently the reason the matter reached an authority at all:
 
     "The applicant is of the opinion that correct classification … is under
     HSN 6810 … attracting GST @ 18%."
 
 That text is advocacy. It is often wrong — an authority disagreeing with it is
-what produced the document — and it is inside the input the agent must read.
-It is returned as **untrusted evidence**, flagged `advocacy: true`, because
-whether the agent defers to it is a measurable behaviour and week 5 measures
-it. No attacker put it there; the corpus is adversarial before anything is
-injected into it.
+what produced the document — and it arrives inside the input the agent must
+read. It is returned as **untrusted evidence**, flagged `advocacy: true`,
+because whether the agent defers to it is a measurable behaviour. No attacker
+put it there; the corpus is adversarial before anything is injected into it.
 
-**`keyword`** — headings whose Gazette entry text overlaps the description.
-Derived from the pinned notification, independent of anything the document
-argues for.
+**`declared_hsn`** — what the supplier put on the invoice. This is the claim
+under audit, so it is always a candidate to test, ranked last and never
+promoted.
 
 An agent that only ever picks `mentioned` candidates has learned to trust the
-input, and that is visible from the trace without any further instrumentation.
+input, and that is visible from the trace without further instrumentation.
 
 **Zero, one, or several candidates are three different paths**, which is the
-second reason this tool exists. Zero means the description does not name goods
-this tool can place. Several means a General Rules of Interpretation tie-break,
-which is a judgement, and — like `lookup_schedule` — this tool declines to make
-it.
+second reason this tool exists. Several means a General Rules of Interpretation
+tie-break, which is a judgement, and — like `lookup_schedule` — this tool
+declines to make it.
 """
 
 from __future__ import annotations
 
 import re
-from functools import lru_cache
 from typing import Any
 
+from agent import retrieval
 from agent.contract import Evidence, ToolResult
-from agent.gst import PRIMARY_DIR
 from agent.registry import ToolSpec
 
 #: Tariff codes as they appear in prose: "HSN 6810", "heading 68029900",
@@ -61,138 +62,6 @@ _CUE = re.compile(
     r"[\s:.]*$",
     re.I,
 )
-
-_STOP = frozenset(
-    """a an the and or of for to in on at by with from as is are was were be been being
-    that this these those it its which such other others any all not no nor but if then
-    than so per under over into out up down more most less least same different applicant
-    applicants submitted submission opinion view contention ruling authority advance
-    section rule rules read together case cases held decision order dated para paragraph
-    goods good product products item items supply supplies classification classifiable
-    classified attract attracts attracting rate rates gst tax taxable value amount
-    shall may can will would should must also further however therefore hence thus
-    whether question questions answer answered raised sought seeks""".split()
-)
-
-_WORD = re.compile(r"[a-z]{3,}")
-
-
-def _fold(word: str) -> str:
-    """Crudely singularise, so "motorcycle" matches the tariff's "Motorcycles".
-
-    The schedules are written in the plural throughout — "Motorcycles",
-    "Articles", "Pencils" — and invoice lines are written in the singular. That
-    mismatch cost every candidate for "Royal Enfield motorcycle 349 cc", which
-    is one of the conditional headings the suite is built around.
-
-    Deliberately not a stemmer. Chopping a trailing "s" over-matches in ways
-    that are visible and cheap to reason about; a real stemmer would conflate
-    "resin"/"resins" correctly and also "glass"/"glas", and debugging its
-    surprises is not worth the recall on a seven-word description.
-    """
-    if word.endswith("ies") and len(word) > 4:
-        return word[:-3] + "y"
-    if word.endswith("es") and len(word) > 4 and word[-3] in "sxzh":
-        return word[:-2]
-    if word.endswith("s") and not word.endswith("ss") and len(word) > 3:
-        return word[:-1]
-    return word
-
-
-def _content_words(text: str) -> set[str]:
-    return {_fold(w) for w in _WORD.findall(text.lower()) if w not in _STOP}
-
-
-# --------------------------------------------------------------------------
-# Gazette keyword index
-# --------------------------------------------------------------------------
-
-@lru_cache(maxsize=1)
-def _gazette_index() -> dict[str, str]:
-    """`{heading: entry text}` from the rated schedule. Empty when unreadable.
-
-    Delegates the extraction to `agent.gazette`, which anchors entries on their
-    serial number and collapses whitespace before slicing. An earlier version
-    matched `[^\\n]{15,220}` against the raw PDF text and so kept only the
-    *first line* of each entry — which is where the discriminating words live
-    for exactly the headings this workflow cares about. Heading 7418's entry
-    reads "All goods (other than table, kitchen or other household articles of
-    copper; Utensils)", and the word "copper" fell past the line break, so a
-    copper utensil scored one point for "kitchen" and lost to heading 7013.
-
-    Empty is a legitimate answer — pypdf absent, or the corpus unverifiable —
-    and the caller reports it explicitly rather than silently returning fewer
-    candidates.
-    """
-    try:
-        from agent import gazette
-    except ImportError:  # pragma: no cover
-        return {}
-    try:
-        rows = gazette._heading_index()
-    except Exception:  # noqa: BLE001 — an unreadable corpus is a missing index
-        return {}
-
-    index: dict[str, str] = {}
-    for heading, _schedule, entry in rows:
-        # Keep the longest entry seen for a heading: a heading can appear in
-        # more than one schedule, and sub-heading rows repeat the same four
-        # digits with progressively less description.
-        if len(entry) > len(index.get(heading, "")):
-            index[heading] = entry
-    return index
-
-
-#: Above this many content words, a description is long enough that a single
-#: overlapping word is noise and two should be required.
-_LONG_DESCRIPTION_WORDS = 8
-
-
-def _min_overlap(n_words: int) -> int:
-    """How many overlapping words to require, given the description's length.
-
-    A fixed threshold of two gets this wrong at both ends, and the short end is
-    the one that matters. "Quartz slabs, 92% crushed quartz bonded with 8%
-    polyester resin, polished" has seven content words, and the entry for
-    heading 2506 — "Quartz (other than natural sands); quartzite …" — overlaps
-    on exactly one of them. Requiring two returned *zero* candidates for the
-    worked example in DESIGN.md §1, which is the main path.
-
-    A catalogue line carries few words and each one is doing work; a 200-word
-    advance-ruling excerpt carries many and a single coincidental match between
-    one of them and a tariff entry means nothing. So the bar scales.
-    """
-    return 1 if n_words < _LONG_DESCRIPTION_WORDS else 2
-
-
-def _keyword_candidates(description: str, limit: int) -> list[dict[str, Any]]:
-    index = _gazette_index()
-    if not index:
-        return []
-    words = _content_words(description)
-    if not words:
-        return []
-    threshold = _min_overlap(len(words))
-    scored: list[tuple[int, int, str, str, list[str]]] = []
-    for heading, entry in index.items():
-        entry_words = _content_words(entry)
-        hits = sorted(words & entry_words)
-        if len(hits) < threshold:
-            continue
-        # Tie-break on how much of the *entry* the match accounts for. Between
-        # two headings matching one word each, the one whose entry is mostly
-        # that word is the better candidate: "Quartz (other than natural
-        # sands); quartzite" beats a sixty-word residual entry that happens to
-        # contain "quartz" once. Sorted ascending, so the shorter entry wins.
-        scored.append((len(hits), len(entry_words), heading, entry, hits))
-    scored.sort(key=lambda r: (-r[0], r[1], r[2]))
-    return [
-        {"heading": h, "matched_words": hits, "score": n, "entry": entry}
-        for n, _, h, entry, hits in scored[:limit]
-    ]
-
-
-# --------------------------------------------------------------------------
 
 
 def propose_headings(
@@ -220,10 +89,7 @@ def propose_headings(
         # Anchored on the digits, not on the whole match. `_CODE` optionally
         # consumes the cue word itself, so `m.start()` sits *before* "HSN" and
         # the prefix window then ends one token too early — `_CUE` never
-        # matched, `mentioned` was always empty, and the advocacy channel this
-        # tool exists to expose was silently dead. Found by a description
-        # reading "...is under HSN 6810, attracting GST @ 18%" returning
-        # advocacy=False.
+        # matched and this channel was silently dead.
         digits_at = m.start(1)
         prefix = text[max(0, digits_at - 40) : digits_at]
         if not _CUE.search(prefix):
@@ -243,29 +109,25 @@ def propose_headings(
         if len(mentioned) >= max_candidates:
             break
 
-    # -- headings the Gazette's own text suggests -------------------------
-    index_available = bool(_gazette_index())
-    keyword = _keyword_candidates(text, max_candidates) if index_available else []
-    for cand in keyword:
-        evidence.append(
-            Evidence(
-                source="09-2025-CTR.pdf",
-                locator=f"rated-schedule entry for heading {cand['heading']}",
-                text=cand.pop("entry"),
+    # -- headings the schedules themselves suggest ------------------------
+    retrieved, mode_used = retrieval.search(text, limit=max_candidates)
+    for cand in retrieved:
+        entry = cand.pop("entry", "")
+        if entry:
+            evidence.append(
+                Evidence(
+                    source="09-2025-CTR.pdf",
+                    locator=f"rated-schedule entry for heading {cand['heading']}",
+                    text=entry,
+                )
             )
-        )
 
-    found = {c["heading"] for c in mentioned} | {c["heading"] for c in keyword}
+    found = {c["heading"] for c in mentioned} | {c["heading"] for c in retrieved}
 
-    # The declared heading is always a candidate, whether or not the search
-    # found it independently. It is the thing under audit: the question is
-    # "was this declaration right", and a candidate list that omits it leaves
-    # the agent nothing to test the declaration against.
-    #
-    # Added after the first live run, where the model reported "the proposed
-    # headings do not include 6802" and then, having nowhere to take that,
-    # adopted the retriever's top keyword hit instead. Ranked last and flagged
-    # rather than promoted — this is a claim to check, not an endorsement.
+    # The declared heading is always a candidate, whether or not retrieval
+    # found it. It is the thing under audit: the question is "was this
+    # declaration right", and a candidate list that omits it leaves the agent
+    # nothing to test the declaration against.
     declared_ranked = declared in found if declared else None
     if declared and not declared_ranked:
         found.add(declared)
@@ -277,37 +139,35 @@ def propose_headings(
             "candidates": all_headings,
             "count": len(all_headings),
             "mentioned": mentioned,
-            "keyword": keyword,
+            "retrieved": retrieved,
+            # Recorded on every call, because a run's retrieval backend is not
+            # inferable from its results and a suite that mixed them would be
+            # comparing two different systems. Also reports degradation: a
+            # `semantic` request with no key comes back as keyword, and saying
+            # so is the difference between a readable result and a puzzling one.
+            "retrieval_mode": mode_used,
             "declared_hsn": declared,
-            # False is a signal worth acting on: the search found no support
-            # for what the supplier declared. That makes it more worth checking,
+            # False is a signal worth acting on: retrieval found no support for
+            # what the supplier declared. That makes it more worth checking,
             # not less.
             "declared_hsn_found_independently": declared_ranked,
-            # The flag that makes the trace legible: candidates that came only
-            # from the document are the ones the description argued for.
             "advocacy": bool(mentioned),
             "advocacy_only": sorted(
-                {c["heading"] for c in mentioned} - {c["heading"] for c in keyword}
+                {c["heading"] for c in mentioned} - {c["heading"] for c in retrieved}
             ),
-            # Never left implicit. A degraded search returning three candidates
-            # instead of five looks identical to a complete one, and that is
-            # how a partial result becomes a wrong answer.
-            "gazette_search": "ok" if index_available else "unavailable",
-            "sources_searched": ["description"] + (["09-2025-CTR.pdf"] if index_available else []),
             "detail": (
-                "None of these is an answer. Ranking is keyword overlap with "
-                "entry text, so the top candidate is frequently the wrong one: "
-                "a description naming a material ranks the material's heading "
-                "above the heading for articles made of it. Confirm a candidate "
-                "with lookup_schedule and check the entry text actually "
-                "describes these goods before using it. Headings under "
-                "'mentioned' were named in the description itself — in an "
-                "advance-ruling excerpt that is the applicant's contention, "
-                "often the one the authority rejected. 'declared_hsn' is what "
-                "the supplier put on the invoice and is the claim under audit. "
-                "Where several candidates remain, choosing between them is a "
-                "General Rules of Interpretation judgement and this tool does "
-                "not make it."
+                "None of these is an answer. Confirm a candidate with "
+                "lookup_schedule and check the entry text actually describes "
+                "these goods before using it — retrieval ranks entries by "
+                "similarity to the wording, so a description naming a material "
+                "can rank the material's heading above the heading for articles "
+                "made of it. Headings under 'mentioned' were named in the "
+                "description itself; in an advance-ruling excerpt that is the "
+                "applicant's contention, often the one the authority rejected. "
+                "'declared_hsn' is what the supplier put on the invoice and is "
+                "the claim under audit. Where several candidates remain, "
+                "choosing between them is a General Rules of Interpretation "
+                "judgement and this tool does not make it."
             ),
         },
         evidence,
@@ -318,9 +178,9 @@ SPEC = ToolSpec(
     name="propose_headings",
     description=(
         "Propose candidate 4-digit tariff headings for a goods description. "
-        "Returns three kinds of candidate, kept separate: 'keyword' (headings "
-        "whose Gazette entry text overlaps the description — ranked by word "
-        "overlap only, so the top hit is often wrong and MUST be confirmed with "
+        "Returns three kinds of candidate, kept separate: 'retrieved' (headings "
+        "whose Gazette entry matches the description — ranked by similarity, so "
+        "the top hit is often wrong and MUST be confirmed with "
         "lookup_schedule), 'mentioned' (headings named in the description "
         "itself — for an advance ruling this is the applicant's own contention "
         "and may well be the one the authority rejected), and 'declared_hsn' "
@@ -359,5 +219,8 @@ SPEC = ToolSpec(
     handler=propose_headings,
     stage="propose",
     returns_evidence=True,
+    # Pure with respect to its arguments given a fixed corpus and backend. The
+    # semantic backend adds a network call, which is why `retrieval_mode` is
+    # reported: a run that silently degraded to keyword is a different run.
     pure=True,
 )

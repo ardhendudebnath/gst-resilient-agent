@@ -199,7 +199,11 @@ def test_discriminating_words_past_a_line_break_still_count(registry):
     r = call(registry, "propose_headings", description="Copper handi, 2 litre, kitchen use")
     assert r.ok
     assert "7418" in r.data["candidates"]
-    top = r.data["keyword"][0]
+    # Keyword is the default backend, so this asserts against its ranking.
+    # Under a semantic backend the top hit is chosen differently and the
+    # matched-word evidence does not exist, which is why the mode is reported.
+    assert r.data["retrieval_mode"] == "keyword"
+    top = r.data["retrieved"][0]
     assert top["heading"] == "7418"
     assert set(top["matched_words"]) >= {"copper", "kitchen"}
 

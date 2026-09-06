@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -74,6 +75,16 @@ def main(argv: list[str] | None = None) -> int:
         ),
     )
     parser.add_argument(
+        "--retrieval",
+        choices=["keyword", "semantic", "hybrid"],
+        default=None,
+        help=(
+            "candidate retrieval backend (default: keyword). 'semantic' uses "
+            "NVIDIA embeddings and needs NVIDIA_API_KEY; it degrades to keyword "
+            "and says so if unavailable."
+        ),
+    )
+    parser.add_argument(
         "--chaos",
         type=float,
         default=0.0,
@@ -110,6 +121,10 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     load_env()
+    if args.retrieval:
+        # Set before the registry is built, because the retrieval mode is read
+        # per call and a run that changed backend halfway would be two runs.
+        os.environ["RETRIEVAL_MODE"] = args.retrieval
     line = DEMO_LINE if args.demo else _load_line(args.line)
 
     budget = Budget()

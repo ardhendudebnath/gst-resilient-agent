@@ -126,6 +126,56 @@ call the idempotency cache will serve is never perturbed, since it never reaches
 the thing that would fail. **Deduplication therefore reduces an agent's exposure
 to chaos**, which is a real effect that would otherwise be invisible.
 
+## Retrieval: keyword against embeddings
+
+Candidate recall is the ceiling on the whole workflow — a gold heading the
+retriever never proposes cannot be reached however well the agent reasons — so
+it is measured rather than assumed. Recall@k over the 28 golden rows, retrieval
+channel only (the advocacy channel is excluded, so these are lower than the
+tool's end-to-end candidate coverage):
+
+| backend | R@1 | R@3 | R@5 | R@10 | p50 latency |
+|---|---:|---:|---:|---:|---:|
+| keyword (bag-of-words) | 32.1% | 42.9% | 46.4% | 60.7% | **9 ms** |
+| **semantic** (`nemotron-3-embed-1b`) | **46.4%** | **64.3%** | **75.0%** | **89.3%** | 715 ms |
+| hybrid (reciprocal rank fusion) | 32.1% | 57.1% | 64.3% | 82.1% | 708 ms |
+
+Rows where the gold heading is never proposed at all fall from **11/28 to 3/28**.
+
+**Hybrid is worse than pure semantic**, which is the opposite of the usual
+assumption and the more interesting number. RRF weights both backends equally,
+so a keyword list with 32% R@1 drags down a semantic list with 46%. Fusion helps
+when the two are comparable; here one is simply better, and blending it with a
+weaker signal costs 11 points of R@5.
+
+**The default stays keyword.** Switching the retriever outright would move the
+baseline the chaos results are measured against, quietly turning the before/after
+table into "keyword versus embeddings" instead of "no defences versus defences".
+The backend is switchable, recorded on every call as `retrieval_mode`, and gets
+its own row rather than contaminating someone else's.
+
+```bash
+python -m agent --demo --retrieval semantic
+```
+
+### Three things deliberately not used
+
+- **No vector database.** The rated schedule holds 961 entries; at 2048
+  dimensions that is 7.9 MB, one contiguous read, and a full scan is 2 million
+  multiply-adds. pgvector earns its place at 10⁵–10⁷ vectors, not 10³, and a
+  Postgres dependency would break `make test` on a fresh clone. `VectorIndex` is
+  the seam: swap it when the corpus becomes the advance-ruling archive.
+- **No PyMuPDF.** It is AGPL-3.0 and this repository is MIT. `pypdf` (BSD)
+  already extracts all 961 entries from the hash-pinned PDFs, under test.
+- **No fixed-size chunking.** The Gazette is not prose — every row is a serial
+  number, a heading, a description and a rate — and DESIGN §5 requires each
+  citation to resolve to a specific entry. A sliding token window would cut
+  entries in half and make that impossible. One entry, one vector.
+
+Embeddings are cached to disk keyed by model *and* corpus digest, so a
+re-vendored Gazette or a model swap invalidates them rather than answering from
+vectors built against a different document.
+
 ## The failure taxonomy
 
 `FAILURES.md` does not exist yet — it needs the task suite, so that a class can
@@ -292,15 +342,21 @@ Named specifically, because this section is a feature.
 - **`check_conditions` covers five headings** (7418, 8711, 2202, 9608, 2403).
   Any other ambiguous heading returns `not_covered`, and the correct response is
   a refusal. There is no general condition-resolver and there could not be.
-- **Candidate recall caps the suite at ~82%.** In 5 of 28 golden rows the gold
-  heading appears in neither `propose_headings` channel, so those lines cannot
-  be answered correctly however good the reasoning is. The worked example is one
-  of them: the gold heading 6810 reads "Articles of cement, of concrete or of
-  artificial stone", which shares no word with "quartz slabs … polyester resin",
-  so keyword overlap cannot reach it. On the first live run the agent verified
-  the declared heading 6802 instead, found it genuinely ambiguous (5% against
-  18%), found no condition rule encoded for it, and **refused** — which is the
-  designed behaviour on the information available, and still the wrong answer.
+- **Candidate recall caps the suite**, though less tightly than it did.
+  Retrieval alone reaches the gold heading for 60.7% of rows on keyword and
+  89.3% on semantic (R@10); with the advocacy channel added, keyword covers
+  roughly 82%. Rows the retriever never proposes cannot be answered correctly
+  however good the reasoning is.
+- **Semantic retrieval does not fix the worked example.** Gold heading 6810
+  reads "Articles of cement, of concrete or of artificial stone"; embeddings
+  rank the *mineral* headings (2506, 2505, 2504) above it for "quartz slabs …
+  polyester resin", because the description is about the material and the
+  correct heading is about the article made from it. That distinction is the
+  classification problem itself, not a retrieval problem. On the live runs the
+  agent verified the declared heading 6802 instead, found it genuinely ambiguous
+  (5% against 18%), found no condition rule encoded for it, and **refused** —
+  the designed behaviour on the information available, and still the wrong
+  answer.
 - **`--demo` does not currently produce the right answer**, for the reason
   above. It is left that way rather than tuned: fitting the retriever to one
   example is exactly what the week-3 suite exists to prevent, and a demo that
