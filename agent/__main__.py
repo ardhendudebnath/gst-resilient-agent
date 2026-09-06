@@ -21,7 +21,7 @@ from pathlib import Path
 
 from agent.budget import Budget
 from agent.config import agent_model, load_env
-from agent.llm import AnthropicModel, ModelError
+from agent.llm import ModelError, build
 from agent.loop import run_task
 from agent.policy import Policy
 from agent.tools import build_registry
@@ -63,7 +63,22 @@ def main(argv: list[str] | None = None) -> int:
         help="which defences are in force (default: baseline, i.e. none)",
     )
     parser.add_argument("--model", default=None, help=f"model id (default: {agent_model()})")
+    parser.add_argument(
+        "--thinking",
+        action="store_true",
+        help=(
+            "enable the model's reasoning mode. Off by default: the chain bills "
+            "as output tokens and a 12-turn loop would exhaust the 60k run "
+            "budget. Raise --max-tokens-budget if you turn this on."
+        ),
+    )
     parser.add_argument("--max-iterations", type=int, default=None)
+    parser.add_argument(
+        "--max-tokens-budget",
+        type=int,
+        default=None,
+        help="override the per-run token budget (default 60000)",
+    )
     parser.add_argument("--json", action="store_true", help="print the result as JSON")
     args = parser.parse_args(argv)
 
@@ -71,17 +86,17 @@ def main(argv: list[str] | None = None) -> int:
     line = DEMO_LINE if args.demo else _load_line(args.line)
 
     budget = Budget()
-    if args.max_iterations is not None:
+    if args.max_iterations is not None or args.max_tokens_budget is not None:
         budget = Budget(
-            max_iterations=args.max_iterations,
+            max_iterations=args.max_iterations or budget.max_iterations,
             max_tool_calls=budget.max_tool_calls,
             max_calls_per_tool=budget.max_calls_per_tool,
-            max_tokens=budget.max_tokens,
+            max_tokens=args.max_tokens_budget or budget.max_tokens,
             max_wall_clock_s=budget.max_wall_clock_s,
         )
 
     try:
-        model = AnthropicModel(args.model)
+        model = build(args.model, thinking=args.thinking)
         model._ensure_client()
     except ModelError as exc:
         print(f"error: {exc}", file=sys.stderr)

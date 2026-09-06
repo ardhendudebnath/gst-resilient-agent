@@ -79,9 +79,12 @@ def _model() -> Model | None:
         return _MODEL
     _MODEL_RESOLVED = True
     try:
-        from agent.llm import AnthropicModel
+        from agent.llm import build
 
-        candidate = AnthropicModel(max_tokens=512)
+        # 512 tokens: this call writes three to five sentences from a
+        # determination that is already made. Reasoning stays off for the same
+        # reason — there is nothing left to decide.
+        candidate = build(max_tokens=512)
         candidate._ensure_client()  # surface a missing key now, not mid-suite
         _MODEL = candidate
     except Exception:  # noqa: BLE001 — absence of a key is a valid state

@@ -204,6 +204,38 @@ def test_discriminating_words_past_a_line_break_still_count(registry):
     assert set(top["matched_words"]) >= {"copper", "kitchen"}
 
 
+def test_the_declared_heading_is_always_a_candidate(registry):
+    """The declaration is the claim under audit and must be testable.
+
+    Regression from the first live run: the tool took no declared_hsn, the
+    model reported "the proposed headings do not include 6802", and having
+    nowhere to take that it adopted the retriever's top keyword hit and
+    answered 5% on a line whose declared heading it never checked.
+    """
+    r = call(
+        registry, "propose_headings",
+        description="Quartz slabs, 92% crushed quartz bonded with 8% polyester resin",
+        declared_hsn="6802",
+    )
+    assert r.ok
+    assert "6802" in r.data["candidates"]
+    # The search does not independently support it, and saying so is the point:
+    # that makes it more worth checking, not less.
+    assert r.data["declared_hsn_found_independently"] is False
+    assert r.data["declared_hsn"] == "6802"
+
+
+def test_a_declared_heading_the_search_also_found_is_not_duplicated(registry):
+    r = call(
+        registry, "propose_headings",
+        description="Royal Enfield motorcycle 349 cc",
+        declared_hsn="8711",
+    )
+    assert r.ok
+    assert r.data["candidates"].count("8711") == 1
+    assert r.data["declared_hsn_found_independently"] is True
+
+
 def test_advocacy_channel_fires_on_a_heading_the_document_argues_for(registry):
     """Regression: `_CODE` consumed the cue word, so the prefix window ended one
     token early, `_CUE` never matched and `mentioned` was always empty — which

@@ -164,15 +164,31 @@ most convincing kind.
 ## Reproducing
 
 ```bash
-pip install -e '.[gazette,models,dev]'
-cp .env.example .env    # add ANTHROPIC_API_KEY
+pip install -e '.[gazette,dev]'
+cp .env.example .env    # add NVIDIA_API_KEY
 ```
+
+That is the whole install. The default model path is NVIDIA's API catalog,
+reached with one POST over stdlib `urllib`, so no provider SDK is needed —
+`pypdf` for the Gazette PDFs is the only runtime dependency. The model is
+`nvidia/nemotron-3-super-120b-a12b`: the same open-weight model Project 01
+benchmarked, so the two projects' numbers stay comparable, and it has a
+published NIM container, so "you could self-host this" is demonstrable rather
+than asserted. A self-hosted container serves the same wire format, which makes
+`NIM_BASE_URL` the only difference — and the bridge to Project 03.
 
 Run the worked example from `docs/DESIGN.md` §1:
 
 ```bash
 python -m agent --demo
 ```
+
+Reasoning is **off** by default. Nemotron emits its chain into a separate field
+that still bills as output tokens, and a 12-turn loop against the 60k budget in
+`docs/DESIGN.md` §10 would exhaust itself before reaching an opinion. Turn it on
+with `--thinking` and raise `--max-tokens-budget` to match; either way it is
+recorded on every completion, so a result can never imply reasoning was on when
+it was not.
 
 The test suite needs no API key and no network:
 
@@ -201,7 +217,17 @@ Named specifically, because this section is a feature.
   a refusal. There is no general condition-resolver and there could not be.
 - **Candidate recall caps the suite at ~82%.** In 5 of 28 golden rows the gold
   heading appears in neither `propose_headings` channel, so those lines cannot
-  be answered correctly however good the reasoning is.
+  be answered correctly however good the reasoning is. The worked example is one
+  of them: the gold heading 6810 reads "Articles of cement, of concrete or of
+  artificial stone", which shares no word with "quartz slabs … polyester resin",
+  so keyword overlap cannot reach it. On the first live run the agent verified
+  the declared heading 6802 instead, found it genuinely ambiguous (5% against
+  18%), found no condition rule encoded for it, and **refused** — which is the
+  designed behaviour on the information available, and still the wrong answer.
+- **`--demo` does not currently produce the right answer**, for the reason
+  above. It is left that way rather than tuned: fitting the retriever to one
+  example is exactly what the week-3 suite exists to prevent, and a demo that
+  passes because it was hand-fitted is worth nothing.
 - **All 28 golden rows are `gazette-derived`** — slab read out of the pinned
   notification, heading from each authority's operative ruling, **no human has
   confirmed any of them.** Every accuracy figure inherits that. A before/after

@@ -195,11 +195,21 @@ def _keyword_candidates(description: str, limit: int) -> list[dict[str, Any]]:
 # --------------------------------------------------------------------------
 
 
-def propose_headings(description: str, max_candidates: int = 5) -> ToolResult:
+def propose_headings(
+    description: str,
+    max_candidates: int = 5,
+    declared_hsn: str | None = None,
+) -> ToolResult:
     """Propose candidate 4-digit tariff headings for a goods description."""
     text = (description or "").strip()
     if not text:
         return ToolResult.err("bad_argument", "description is empty")
+
+    declared = (declared_hsn or "").strip().replace(" ", "")[:4] or None
+    if declared is not None and not declared.isdigit():
+        return ToolResult.err(
+            "bad_argument", f"declared_hsn {declared_hsn!r} is not a 4-digit heading"
+        )
 
     # -- headings named in the document (untrusted) -----------------------
     mentioned: list[dict[str, Any]] = []
@@ -245,7 +255,22 @@ def propose_headings(description: str, max_candidates: int = 5) -> ToolResult:
             )
         )
 
-    all_headings = sorted({c["heading"] for c in mentioned} | {c["heading"] for c in keyword})
+    found = {c["heading"] for c in mentioned} | {c["heading"] for c in keyword}
+
+    # The declared heading is always a candidate, whether or not the search
+    # found it independently. It is the thing under audit: the question is
+    # "was this declaration right", and a candidate list that omits it leaves
+    # the agent nothing to test the declaration against.
+    #
+    # Added after the first live run, where the model reported "the proposed
+    # headings do not include 6802" and then, having nowhere to take that,
+    # adopted the retriever's top keyword hit instead. Ranked last and flagged
+    # rather than promoted — this is a claim to check, not an endorsement.
+    declared_ranked = declared in found if declared else None
+    if declared and not declared_ranked:
+        found.add(declared)
+
+    all_headings = sorted(found)
 
     return ToolResult.ok_(
         {
@@ -253,6 +278,11 @@ def propose_headings(description: str, max_candidates: int = 5) -> ToolResult:
             "count": len(all_headings),
             "mentioned": mentioned,
             "keyword": keyword,
+            "declared_hsn": declared,
+            # False is a signal worth acting on: the search found no support
+            # for what the supplier declared. That makes it more worth checking,
+            # not less.
+            "declared_hsn_found_independently": declared_ranked,
             # The flag that makes the trace legible: candidates that came only
             # from the document are the ones the description argued for.
             "advocacy": bool(mentioned),
@@ -265,12 +295,19 @@ def propose_headings(description: str, max_candidates: int = 5) -> ToolResult:
             "gazette_search": "ok" if index_available else "unavailable",
             "sources_searched": ["description"] + (["09-2025-CTR.pdf"] if index_available else []),
             "detail": (
-                "Headings under 'mentioned' were named in the description itself. "
-                "In an advance-ruling excerpt that is the applicant's contention "
-                "— often the contention an authority rejected. Treat it as a "
-                "claim to be checked, not as an answer. Where several candidates "
-                "remain, choosing between them is a General Rules of "
-                "Interpretation judgement and this tool does not make it."
+                "None of these is an answer. Ranking is keyword overlap with "
+                "entry text, so the top candidate is frequently the wrong one: "
+                "a description naming a material ranks the material's heading "
+                "above the heading for articles made of it. Confirm a candidate "
+                "with lookup_schedule and check the entry text actually "
+                "describes these goods before using it. Headings under "
+                "'mentioned' were named in the description itself — in an "
+                "advance-ruling excerpt that is the applicant's contention, "
+                "often the one the authority rejected. 'declared_hsn' is what "
+                "the supplier put on the invoice and is the claim under audit. "
+                "Where several candidates remain, choosing between them is a "
+                "General Rules of Interpretation judgement and this tool does "
+                "not make it."
             ),
         },
         evidence,
@@ -281,12 +318,16 @@ SPEC = ToolSpec(
     name="propose_headings",
     description=(
         "Propose candidate 4-digit tariff headings for a goods description. "
-        "Returns two kinds of candidate, kept separate: 'mentioned' (headings "
-        "named in the description itself — for an advance ruling this is the "
-        "applicant's own contention and may well be the one the authority "
-        "rejected) and 'keyword' (headings whose Gazette entry text overlaps "
-        "the description). Zero, one and several candidates are three different "
-        "situations. This tool does not choose between candidates."
+        "Returns three kinds of candidate, kept separate: 'keyword' (headings "
+        "whose Gazette entry text overlaps the description — ranked by word "
+        "overlap only, so the top hit is often wrong and MUST be confirmed with "
+        "lookup_schedule), 'mentioned' (headings named in the description "
+        "itself — for an advance ruling this is the applicant's own contention "
+        "and may well be the one the authority rejected), and 'declared_hsn' "
+        "(what the supplier put on the invoice, which is the claim under "
+        "audit). Always pass declared_hsn if the line has one. Zero, one and "
+        "several candidates are three different situations. This tool does not "
+        "choose between candidates."
     ),
     parameters={
         "type": "object",
@@ -301,6 +342,15 @@ SPEC = ToolSpec(
                 "description": "Cap on candidates returned per source. Default 5.",
                 "minimum": 1,
                 "maximum": 20,
+            },
+            "declared_hsn": {
+                "type": "string",
+                "description": (
+                    "The heading the supplier declared on the invoice, if any. "
+                    "Returned as a candidate to verify, never as an answer."
+                ),
+                "pattern": r"^\d{4}",
+                "maxLength": 12,
             },
         },
         "required": ["description"],

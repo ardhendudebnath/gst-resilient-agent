@@ -106,9 +106,26 @@ def max_run_usd() -> float:
         ) from None
 
 
-#: Only tool 7 calls a model. Pinned exactly: model behaviour changes under the
-#: same name, so every result file records the id string actually used.
-DEFAULT_MODEL = "claude-sonnet-5"
+#: The model driving the loop and tool 7. Pinned exactly: model behaviour
+#: changes under the same name, so every result file records the id actually
+#: used.
+#:
+#: The same open-weight model Project 01 benchmarked, served through NVIDIA's
+#: catalog so no GPU is needed. Three reasons it is the default rather than a
+#: frontier model:
+#:
+#:   - the two projects' numbers stay comparable, and Project 01 already
+#:     measured this model reciting an abolished rate in 18.3% of single calls,
+#:     which is the behaviour the agent is supposed to fix;
+#:   - it has a published NIM container, so "you could self-host this" is
+#:     demonstrable rather than asserted — the bridge to Project 03;
+#:   - chaos testing means hundreds of runs, and the brief names the surprise
+#:     API bill as a pitfall.
+#:
+#: Hosted model ids get retired: Project 01's original pick returned "410 Gone:
+#: reached its end of life" on its first live call. Expect to change this, and
+#: verify a successor by calling it rather than by reading a docs page.
+DEFAULT_MODEL = "nvidia/nemotron-3-super-120b-a12b"
 
 
 def agent_model() -> str:

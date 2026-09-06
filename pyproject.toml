@@ -23,8 +23,12 @@ dependencies = []
 # Tools 3 and 5 read the archived notifications, which are PDFs.
 gazette = ["pypdf>=5.0"]
 
-# Tool 7 is the only one that calls a model.
-models = ["anthropic>=0.40"]
+# The default model path — NVIDIA's API catalog, and a self-hosted NIM
+# container on the same wire format — needs NOTHING. It is one POST with a JSON
+# body over stdlib urllib, so `pip install -e '.[gazette]'` plus a key is a
+# complete working install. This extra exists only for the optional Anthropic
+# comparison row.
+anthropic = ["anthropic>=0.40"]
 
 # The MCP server, and the client the agent uses to reach it.
 mcp = ["mcp>=1.2"]
@@ -40,7 +44,7 @@ dev = ["pytest>=8.0", "ruff>=0.6"]
 
 # Everything, for a full adversarial run.
 all = [
-    "gst-resilient-agent[gazette,models,mcp,eval,dev]",
+    "gst-resilient-agent[gazette,anthropic,mcp,eval,dev]",
 ]
 
 [tool.setuptools.packages.find]
