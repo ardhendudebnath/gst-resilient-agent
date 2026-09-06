@@ -257,10 +257,16 @@ class Registry:
         tracer: Tracer | None,
         started: float,
     ) -> ToolResult:
+        """Stamp the result with its invocation id and duration, then trace it.
+
+        Stamped here rather than in each handler for the same reason exceptions
+        are converted here: it is the one path every call goes through, so a
+        tool cannot forget and cannot lie about its own latency.
+        """
+        elapsed_ms = round((time.perf_counter() - started) * 1000, 3)
+        result = result.stamped(tool_call_id=call.call_id, latency_ms=elapsed_ms)
         if tracer is not None:
-            tracer.tool_result(
-                call, result, duration_ms=int((time.perf_counter() - started) * 1000)
-            )
+            tracer.tool_result(call, result, duration_ms=int(elapsed_ms))
         return result
 
 

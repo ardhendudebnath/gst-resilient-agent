@@ -48,7 +48,55 @@ def test_ok_result_shape():
     j = r.to_json()
     assert j["data"]["slab"] == "18"
     assert j["evidence"][0]["source"] == "09-2025-CTR.pdf"
-    assert "retryable" not in j  # only meaningful on failures
+
+
+def test_the_envelope_has_the_same_shape_on_success_and_failure():
+    """Every field present either way, so a consumer never branches on key
+    existence. An envelope whose shape depends on the outcome is one that gets
+    parsed two different ways, and the second way is always the buggy one."""
+    required = {"ok", "data", "error", "retryable", "tool_call_id", "latency_ms"}
+    good = ToolResult.ok_({"slab": "18"}).to_json()
+    bad = ToolResult.err("timeout", "took too long").to_json()
+    assert required <= set(good)
+    assert required <= set(bad)
+    assert good["error"] is None and good["retryable"] is False
+    assert bad["error"] == "timeout" and bad["retryable"] is True
+
+
+def test_an_unstamped_result_reports_no_id_or_latency():
+    """Only `registry.invoke` stamps them, so a hand-built result says so
+    rather than carrying a plausible-looking zero."""
+    r = ToolResult.ok_({"a": 1})
+    assert r.tool_call_id is None
+    assert r.latency_ms is None
+
+
+def test_stamping_preserves_everything_else():
+    r = ToolResult.err("timeout", "slow", data={"x": 1}).stamped(
+        tool_call_id="abc123", latency_ms=12.5
+    )
+    assert r.tool_call_id == "abc123"
+    assert r.latency_ms == 12.5
+    assert r.error == "timeout" and r.retryable is True
+    assert r.data == {"x": 1}
+
+
+def test_registry_stamps_id_and_latency_onto_every_result():
+    """Stamped on the one path every call goes through, so a tool cannot forget
+    and cannot lie about its own latency."""
+    from agent.registry import build_call
+    from agent.tools import build_registry
+
+    registry = build_registry()
+    call = build_call("screen_scope", {"description": "copper pipe fittings"})
+    result = registry.invoke(call)
+    assert result.tool_call_id == call.call_id
+    assert isinstance(result.latency_ms, float)
+    assert result.latency_ms >= 0.0
+
+    missing = registry.invoke(build_call("no_such_tool", {}))
+    assert missing.tool_call_id is not None, "failures are stamped too"
+    assert missing.latency_ms is not None
 
 
 def test_call_key_is_canonical_over_argument_order():

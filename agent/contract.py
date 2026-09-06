@@ -137,6 +137,19 @@ class ToolResult:
     #: Set by the chaos middleware when it altered this result, so a trace can
     #: never be misread as an organic failure. Absent on real runs.
     chaos: str | None = None
+    #: Stamped by `registry.invoke` once the call completes, so that a result
+    #: is self-describing wherever it ends up — in a trace, a results file, or
+    #: an error report — without having to be paired back up with its call.
+    #:
+    #: This does NOT replace `ToolCall.call_id`, and the two must not be
+    #: collapsed: `call_id` identifies one invocation, `ToolCall.key` identifies
+    #: the (tool, arguments) pair that repeats. Deduplication keys on the
+    #: second. A result carries the first purely so it can be traced back.
+    tool_call_id: str | None = None
+    #: Wall-clock for this invocation, milliseconds. Measured by the registry
+    #: around the handler, so it includes argument validation and excludes the
+    #: model's thinking time — it is the tool's latency, not the step's.
+    latency_ms: float | None = None
 
     # -- constructors ----------------------------------------------------
 
@@ -181,35 +194,61 @@ class ToolResult:
     # -- serialisation ---------------------------------------------------
 
     def to_json(self) -> dict[str, Any]:
-        out: dict[str, Any] = {"ok": self.ok, "data": dict(self.data)}
+        """The full envelope. Every field is always present.
+
+        `error` and `retryable` are emitted even on success, as null and false,
+        so a consumer never has to branch on key existence to read a result.
+        An envelope whose shape depends on the outcome is one that gets parsed
+        two different ways.
+        """
+        out: dict[str, Any] = {
+            "ok": self.ok,
+            "data": dict(self.data),
+            "error": self.error,
+            "retryable": self.retryable,
+            "tool_call_id": self.tool_call_id,
+            "latency_ms": self.latency_ms,
+        }
         if self.evidence:
             out["evidence"] = [e.to_json() for e in self.evidence]
-        if not self.ok:
-            out["error"] = self.error
-            out["retryable"] = self.retryable
         if self.message:
             out["message"] = self.message
         if self.chaos:
             out["chaos"] = self.chaos
         return out
 
-    def with_chaos(self, label: str) -> "ToolResult":
+    def _replace(self, **changes: Any) -> "ToolResult":
+        fields = {
+            "ok": self.ok,
+            "data": self.data,
+            "evidence": self.evidence,
+            "error": self.error,
+            "message": self.message,
+            "retryable": self.retryable,
+            "chaos": self.chaos,
+            "tool_call_id": self.tool_call_id,
+            "latency_ms": self.latency_ms,
+        }
+        fields.update(changes)
+        return ToolResult(**fields)  # type: ignore[arg-type]
+
+    def with_chaos(self, label: str | None) -> "ToolResult":
         """Tag this result as having been altered by the chaos middleware.
 
         Kept here rather than in `chaos/` so that *every* path which fabricates
         a result is forced through one labelled constructor. An unlabelled
         injected failure in a trace is indistinguishable from a real one, which
         would make the failure taxonomy fiction.
+
+        Passing None strips the label, which is what the agent loop does before
+        a result enters the message history: the agent must not be able to tell
+        it is being tested.
         """
-        return ToolResult(
-            ok=self.ok,
-            data=self.data,
-            evidence=self.evidence,
-            error=self.error,
-            message=self.message,
-            retryable=self.retryable,
-            chaos=label,
-        )
+        return self._replace(chaos=label)
+
+    def stamped(self, *, tool_call_id: str, latency_ms: float) -> "ToolResult":
+        """Attach the invocation's id and duration. Called once, by the registry."""
+        return self._replace(tool_call_id=tool_call_id, latency_ms=latency_ms)
 
 
 # --------------------------------------------------------------------------
