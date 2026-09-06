@@ -90,6 +90,7 @@ def run_suite(
     trace_dir: Path | None = None,
     on_progress: Any = None,
     concurrency: int = 1,
+    trace: bool = True,
 ) -> SuiteRun:
     """Run every scenario once and score it. Never raises for a task failure."""
     from agent import retrieval
@@ -138,7 +139,13 @@ def run_suite(
             dispatcher = chaos_dispatcher
 
         path = (trace_dir / f"{run.name}-{scenario.id}.jsonl") if trace_dir else None
-        with Tracer(path=path) as tracer:
+        # `trace=False` keeps events in memory. Tests use it: a default Tracer
+        # writes into `traces/`, so the test suite was quietly depositing
+        # scripted-model traces in the repository alongside real ones — which
+        # then turned up in a diagnostic of a live run and read as a genuine
+        # failure mode. Test artefacts must not be indistinguishable from
+        # evidence.
+        with Tracer(path=path, memory_only=not trace) as tracer:
             result = run_task(
                 scenario.line,
                 model=model,

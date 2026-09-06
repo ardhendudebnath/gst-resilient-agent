@@ -1,7 +1,7 @@
-"""The task suite: composition, determinism, and that the scorer is strict.
+﻿"""The task suite: composition, determinism, and that the scorer is strict.
 
 The scorer is the thing every published number passes through, so most of what
-is tested here is that it *refuses* to pass runs — a lenient scorer produces a
+is tested here is that it *refuses* to pass runs â€” a lenient scorer produces a
 flattering table and nobody notices until someone reads the traces.
 """
 
@@ -73,7 +73,7 @@ def _result(**kw) -> dict:
 
 
 def test_suite_is_in_the_designed_size_range():
-    """DESIGN.md §9 targets 40-60 scenarios."""
+    """DESIGN.md Â§9 targets 40-60 scenarios."""
     all_s = S.all_scenarios()
     assert 40 <= len(all_s) <= 60, f"suite has {len(all_s)} scenarios"
 
@@ -115,7 +115,7 @@ def test_expected_differentials_match_the_tool_that_will_compute_them():
     """Computed by calling `compute_liability`, not by reimplementing it.
 
     An earlier version of this test did the arithmetic itself and disagreed
-    with the tool by one paisa on `sc-gst-0008` — Decimal's default is banker's
+    with the tool by one paisa on `sc-gst-0008` â€” Decimal's default is banker's
     rounding and the tool uses ROUND_HALF_UP. A scorer and a tool that round
     differently scatter off-by-one-paisa failures through the suite, and they
     look exactly like agent errors. Deriving the expectation from the tool
@@ -293,6 +293,7 @@ def test_runner_scores_every_scenario_it_is_given():
         scenario_list=tasks,
         policy=Policy.baseline(),
         name="test-run",
+        trace=False,
     )
     assert len(run.scores) == 3
     assert run.aborted is None
@@ -313,6 +314,7 @@ def test_runner_keeps_finished_tasks_when_the_suite_budget_trips():
         scenario_list=S.all_scenarios()[:4],
         suite_budget=stop,
         name="test-abort",
+        trace=False,
     )
     assert run.aborted == "suite_wall_clock"
     assert len(run.skipped) == 4
