@@ -335,3 +335,47 @@ Hard, set now, before the first chaos run.
 
 Exceeding any bound ends the run in `budget_exhausted`, which is a failure and
 is reported separately from a wrong answer.
+
+---
+
+## 11. Reversals
+
+Appended, not edited over the top. See the note at the head of this document.
+
+### 2026-09-06 — wall-clock per run raised from 120 s to 600 s
+
+**What happened.** The first full baseline run against
+`nvidia/nemotron-3-ultra-550b-a55b`, at six-way concurrency, ended
+`budget_exhausted` on **15 of the first 15 derived scenarios**, every one of
+them on `max_wall_clock_s`. Not one produced an answer to score.
+
+**Why the bound was wrong.** 120 s was set in week 1 against no measured model
+latency. It turns out to bound the *provider*, not the agent. A derived
+scenario needs five or six model turns; the 550B endpoint returns in 2–7 s
+unloaded but 20–40 s under concurrency, so the wall clock is consumed before
+the agent has done anything wrong. The other three bounds — 12 iterations, 20
+tool calls, 60 000 tokens — already constrain agent behaviour precisely and did
+not trip once.
+
+This is the same error the loop already had with 503s and had fixed: charging
+infrastructure cost to the agent, and then recording the result as the agent
+giving up. It was simply baked into a pinned number rather than into code.
+
+**Evidence it is latency and not looping.** The same scenarios at concurrency 1
+complete in 25–55 s. The two-step synthetic scenarios passed throughout, even
+taking 110–172 s, because the bound is checked at the top of each iteration and
+a two-step run only checks it twice — which is also why the smoke test looked
+healthy and the real run did not.
+
+**What changes.** `max_wall_clock_s` 120 → 600, and the `slow` chaos mode's
+ceiling 600 → 1200 so that mode still means something. Nothing else moves.
+Wall-clock stays a backstop against a hang; iterations, tool calls and tokens
+remain the bounds that describe the agent.
+
+**What this costs.** A genuinely hung run now occupies a worker for ten minutes
+instead of two. The suite-level 45-minute stop is unchanged and is what
+actually prevents an overnight bill.
+
+**Recorded, not hidden:** every published run states the budget it ran under,
+so a figure produced at 120 s and one produced at 600 s can never be compared
+by accident.

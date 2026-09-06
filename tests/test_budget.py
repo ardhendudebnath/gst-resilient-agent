@@ -6,10 +6,20 @@ from agent.budget import SLOW_MODE_WALL_CLOCK_S, Budget, Ledger, SuiteBudget
 
 
 def test_defaults_match_the_pinned_design():
-    """docs/DESIGN.md §10. If these change, the design note changes with them."""
+    """docs/DESIGN.md §10, as amended by §11.
+
+    If these change, the design note changes with them — which is exactly what
+    happened on 2026-09-06: this test caught the wall-clock reversal and the
+    reversal was written up before the number moved. That is the whole reason
+    the assertion is here rather than in a comment.
+    """
     b = Budget()
     assert (b.max_iterations, b.max_tool_calls, b.max_calls_per_tool) == (12, 20, 4)
-    assert (b.max_tokens, b.max_wall_clock_s) == (60_000, 120.0)
+    assert b.max_tokens == 60_000
+    # Was 120 s. Raised because it bounded the provider rather than the agent:
+    # the first full baseline ended budget_exhausted on 15 of 15 derived
+    # scenarios, all on this bound, while iterations and tokens never tripped.
+    assert b.max_wall_clock_s == 600.0
 
 
 def test_a_fresh_ledger_is_within_budget():

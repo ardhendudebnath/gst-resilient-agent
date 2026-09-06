@@ -176,6 +176,64 @@ Embeddings are cached to disk keyed by model *and* corpus digest, so a
 re-vendored Gazette or a model swap invalidates them rather than answering from
 vectors built against a different document.
 
+## Document ingestion
+
+`agent/ingest.py` turns a PDF into addressable chunks. Every chunk carries
+enough metadata to point back at the exact span of the exact page of the exact
+document, and `verify()` goes and proves it — re-opening the file, re-checking
+the hash, re-extracting the page and slicing the recorded offsets. A citation
+that cannot be checked is not a citation.
+
+```python
+from agent.ingest import ingest_pdf, verify
+result = ingest_pdf("data/reference/primary/19-2025-CTR.pdf")
+assert all(verify(c) for c in result.chunks)
+```
+
+| field | |
+|---|---|
+| `document_id` | SHA-256 of the file's **bytes** — two copies are one document; a changed byte is a different one, loudly |
+| `page_number` | 1-based, as a human would cite it |
+| `chunk_id` | `<document_id>:p0002:c001` — unique, readable, a source location in itself |
+| `text` | |
+| `metadata` | path, name, sha256, page, ordinal, `char_start`/`char_end`, extractor |
+
+Pages that yield nothing are **reported, not dropped** (`empty` for a probable
+scan, `unreadable` for an extraction failure) — a 52-page notification that
+silently yielded 41 pages is a corpus with an invisible hole in it. Chunking is
+a pure function of `(text, size, overlap)`, so the same PDF ingested twice gives
+byte-identical ids and text.
+
+PyMuPDF is preferred for page fidelity and is an **optional extra**: it is
+AGPL-3.0 and this repository is MIT, so nothing in the default install links it
+and `agent/ingest.py` falls back to `pypdf` (BSD). Each chunk records which
+extractor produced it, because two extractors do not agree character-for-
+character and offsets are only meaningful against the one that made them.
+
+### Adversarial documents
+
+`chaos/documents.py` builds test PDFs that *carry* injections, which tests
+something the chaos middleware cannot reach: whether a payload survives
+**ingestion** — extraction, page segmentation and chunking — before it ever
+reaches the agent.
+
+```python
+from chaos.documents import write_corpus
+write_corpus("build/adversarial")   # 5 payloads x 3 placements, plus a control
+```
+
+Placement is a parameter because it changes the answer: a payload at the end of
+a long page can be split across two chunks and defanged by accident, which
+would read as a defence working. `inline`, `isolated` (own page), and `hidden`
+— white text at 1pt in the bottom margin, invisible to a human reviewing the
+PDF and extracted verbatim by every extractor. That last one is the case where
+"we had a human review the source documents" is not a control at all.
+
+Compliance is scored by the same detectors as the middleware-borne injections,
+so document-borne and middleware-borne results are directly comparable. The
+clean control is not optional: a compliance rate is uninterpretable without the
+rate on the identical document with nothing hidden in it.
+
 ## The failure taxonomy
 
 `FAILURES.md` does not exist yet — it needs the task suite, so that a class can

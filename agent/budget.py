@@ -28,12 +28,15 @@ from dataclasses import dataclass, field
 from typing import Any
 
 #: Wall-clock ceiling under the `slow` chaos mode. That mode returns correct
-#: results at 20x latency, so the ordinary 120 s cap would turn every slow run
-#: into a timeout and measure nothing except the cap itself. Slow-but-correct
-#: tools break agents differently from failing ones, and the brief names not
-#: testing that as a pitfall — so the budget is raised rather than the mode
-#: dropped, and the raised value is recorded on the run.
-SLOW_MODE_WALL_CLOCK_S = 600.0
+#: results at 20x latency, so the ordinary cap would turn every slow run into a
+#: timeout and measure nothing except the cap itself. Slow-but-correct tools
+#: break agents differently from failing ones, and the brief names not testing
+#: that as a pitfall — so the budget is raised rather than the mode dropped,
+#: and the raised value is recorded on the run.
+#:
+#: Raised 600 -> 1200 on 2026-09-06 alongside the ordinary cap, so that the
+#: distinction between the two survives. See docs/DESIGN.md §11.
+SLOW_MODE_WALL_CLOCK_S = 1200.0
 
 
 @dataclass(frozen=True, slots=True)
@@ -45,7 +48,14 @@ class Budget:
     max_tool_calls: int = 20
     max_calls_per_tool: int = 4
     max_tokens: int = 60_000
-    max_wall_clock_s: float = 120.0
+    #: Raised from 120 s on 2026-09-06. The original bounded the *provider*
+    #: rather than the agent: the first full baseline run ended
+    #: `budget_exhausted` on 15 of 15 derived scenarios, every one on this
+    #: bound, because a five-turn run against a loaded endpoint spends more
+    #: than 120 s waiting. Iterations, tool calls and tokens are the bounds
+    #: that describe agent behaviour, and none of them tripped. This one is a
+    #: backstop against a hang. See docs/DESIGN.md §11.
+    max_wall_clock_s: float = 600.0
 
     def for_slow_mode(self) -> "Budget":
         """The same budget with the wall clock raised. See SLOW_MODE_WALL_CLOCK_S."""

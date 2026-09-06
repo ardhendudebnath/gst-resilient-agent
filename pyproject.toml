@@ -23,6 +23,17 @@ dependencies = []
 # Tools 3 and 5 read the archived notifications, which are PDFs.
 gazette = ["pypdf>=5.0"]
 
+# Document ingestion (agent/ingest.py) and the adversarial PDF fixtures in
+# chaos/documents.py.
+#
+# PyMuPDF is **AGPL-3.0** and this project is MIT, which is why it is an extra
+# and not a dependency: nothing in the default install links it, `make test`
+# skips the ingestion tests without it, and agent/ingest.py falls back to pypdf
+# (BSD) when it is absent. Anyone redistributing a build that includes this
+# extra takes on the AGPL obligation; that is their decision to make knowingly
+# rather than one inherited from a requirements file.
+ingest = ["pymupdf>=1.24"]
+
 # The default model path — NVIDIA's API catalog, and a self-hosted NIM
 # container on the same wire format — needs NOTHING. It is one POST with a JSON
 # body over stdlib urllib, so `pip install -e '.[gazette]'` plus a key is a
@@ -43,8 +54,10 @@ eval = [
 dev = ["pytest>=8.0", "ruff>=0.6"]
 
 # Everything, for a full adversarial run.
+# Everything, for a full adversarial run. Note this pulls in the AGPL-3.0
+# ingest extra; use the named extras instead if that matters to you.
 all = [
-    "gst-resilient-agent[gazette,anthropic,mcp,eval,dev]",
+    "gst-resilient-agent[gazette,ingest,anthropic,mcp,eval,dev]",
 ]
 
 [tool.setuptools.packages.find]
