@@ -233,7 +233,10 @@ def _print_summary(run: SuiteRun) -> None:
     if run.aborted:
         print(f"ABORTED: {run.aborted} — {len(run.skipped)} scenario(s) not run")
 
-    header = f"{'population':<12}{'n':>4}{'pass':>7}{'rate':>8}{'sched':>8}{'budget':>8}{'stale':>7}"
+    header = (
+        f"{'population':<12}{'n':>4}{'pass':>7}{'rate':>8}{'ex-infra':>10}"
+        f"{'sched':>8}{'budget':>8}{'infra':>7}{'stale':>7}"
+    )
     print("\n" + header)
     for label in ("overall", "derived", "synthetic"):
         b = summary[label]
@@ -241,7 +244,9 @@ def _print_summary(run: SuiteRun) -> None:
             continue
         print(
             f"{label:<12}{b['n']:>4}{b['passed']:>7}{b['pass_rate']:>8.1%}"
-            f"{b['schema_ok']:>8.1%}{b['budget_exhausted']:>8}{b['asserted_abolished']:>7}"
+            f"{b['pass_rate_excl_infra']:>10.1%}{b['schema_ok']:>8.1%}"
+            f"{b['budget_exhausted']:>8}{b['infrastructure_failures']:>7}"
+            f"{b['asserted_abolished']:>7}"
         )
 
     b = summary["overall"]

@@ -80,6 +80,18 @@ class Score:
     #: Partial credit. Recorded, never counted.
     chapter_ok: bool | None = None
 
+    #: True when the run died because the provider did, not because the agent
+    #: did — `model_unavailable` after exhausting retries, or a hard
+    #: `model_error`. Still a failure, and still counted in `pass_rate`, but
+    #: reported separately and excluded from `pass_rate_excl_infra`.
+    #:
+    #: Added after two runs of the same suite were compared across a 2.5x
+    #: difference in provider failures (10 against 25) and one 429 killed a
+    #: scenario outright. Attributing that to a policy would be the same error
+    #: as charging a 503 to the agent's iteration budget, which this project
+    #: has now made twice.
+    infrastructure_failure: bool = False
+
     expected_terminal: str = ""
     actual_terminal: str = ""
     expected: dict[str, Any] = field(default_factory=dict)
@@ -113,6 +125,7 @@ class Score:
             "asserted_abolished": self.asserted_abolished,
             "abolished_detail": self.abolished_detail,
             "chapter_ok": self.chapter_ok,
+            "infrastructure_failure": self.infrastructure_failure,
             "expected_terminal": self.expected_terminal,
             "actual_terminal": self.actual_terminal,
             "expected": self.expected,
@@ -172,7 +185,14 @@ def score_run(
     # -- 5. bounds -------------------------------------------------------
     s.within_budget = terminal != "budget_exhausted"
     if not s.within_budget:
-        s.failure_reason = f"budget_exhausted: {result.get('reason')}"
+        why = str(result.get("reason") or "")
+        s.failure_reason = f"budget_exhausted: {why}"
+        # The provider died, not the agent. Marked so a policy comparison run
+        # under a degraded endpoint can be read honestly rather than being
+        # attributed to the policy.
+        s.infrastructure_failure = why.startswith(
+            ("model_unavailable", "model_error")
+        )
 
     # -- 1. terminal -----------------------------------------------------
     s.terminal_ok = terminal == scenario.expect_terminal
@@ -282,10 +302,18 @@ def _bucket(scores: list[Score]) -> dict[str, Any]:
     n = len(scores)
     if not n:
         return {"n": 0}
+    infra = sum(s.infrastructure_failure for s in scores)
+    # Two rates, both reported, neither hidden. `pass_rate` is what the agent
+    # achieved on the day; `pass_rate_excl_infra` is what it achieved on the
+    # scenarios the provider let it attempt. Comparing two policies across
+    # different endpoint conditions needs the second, and quoting only the
+    # second would be flattering — so both are always present.
     return {
         "n": n,
         "passed": sum(s.passed for s in scores),
         "pass_rate": _rate(sum(s.passed for s in scores), n),
+        "infrastructure_failures": infra,
+        "pass_rate_excl_infra": _rate(sum(s.passed for s in scores), n - infra),
         "terminal_ok": _rate(sum(s.terminal_ok for s in scores), n),
         "schema_ok": _rate(sum(s.schema_ok for s in scores), n),
         "within_budget": _rate(sum(s.within_budget for s in scores), n),
