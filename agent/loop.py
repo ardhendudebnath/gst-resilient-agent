@@ -168,8 +168,12 @@ HOW TO REPLY
 Reply with exactly one JSON object and nothing else. No prose before or after, \
 no code fences, no explanation outside the object:
 
-  {"thought": "<one sentence on why this call>", "tool": "<tool name>", \
+  {"thought": "<ONE short sentence on why this call>", "tool": "<tool name>", \
 "arguments": {<arguments>}}
+
+Keep `thought` to a single short sentence. It is a note to yourself, not an \
+explanation: the tool result that follows carries the outcome, and a long \
+preamble is discarded before the next turn.
 
 FINISHING
 Every run ends by calling `draft_opinion` exactly once, including the refusals. \
@@ -575,8 +579,26 @@ def run_task(
 
         if problem is not None:
             parse_retries += 1
+            # A reply the provider cut off at the token ceiling is *our*
+            # misconfiguration, not the model failing the protocol, and the two
+            # must not be counted together: one is fixed by raising a limit and
+            # the other by changing a prompt. Conflating them is how a config
+            # bug gets attributed to the model — which is exactly what happened
+            # when `max_tokens` was set to 768 and six replies were severed
+            # mid-object.
+            truncated = completion.stop_reason == "length"
+            if truncated:
+                problem = (
+                    "your reply was cut off at the token limit before the JSON "
+                    "object was complete. Keep `thought` to one short sentence."
+                )
             tracer.emit(
-                "note", step=step, note="unparseable reply", problem=problem,
+                "note",
+                step=step,
+                note="reply truncated at the token limit" if truncated else "unparseable reply",
+                problem=problem,
+                truncated=truncated,
+                tokens_out=completion.tokens_out,
                 retry=parse_retries,
             )
             if parse_retries > policy.max_parse_retries:

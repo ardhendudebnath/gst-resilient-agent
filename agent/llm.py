@@ -242,14 +242,21 @@ class OpenAICompatModel:
         model: str | None = None,
         *,
         provider: str = "nvidia",
-        # The action protocol is one JSON object: a thought, a tool name and a
-        # few arguments, which is about 150 tokens and rarely over 400 even
-        # when `draft_opinion` carries citations and notes. 2048 was the
-        # original ceiling and the model used 1,000-1,900 of it on early turns,
-        # every one of which was then resent on every later turn. Capping the
-        # reply is the cheaper half of that fix; `agent.loop.compact_action` is
-        # the other half.
-        max_tokens: int = 768,
+        # Sized so a complete action always fits, not so a terse one is forced.
+        #
+        # 768 was tried and was a regression: the model writes long `thought`
+        # fields, the cap truncated the reply at exactly 768 tokens, and
+        # truncated JSON does not parse. Six unparseable replies in a four-run
+        # smoke check, where the fix was supposed to *reduce* failures. A cap
+        # that severs the payload converts a cost problem into a correctness
+        # problem, which is the worse trade.
+        #
+        # The compounding cost was never the reply itself; it was the reply
+        # being resent on every later turn, and `agent.loop.compact_action`
+        # fixes that directly. With compaction in place a verbose reply is paid
+        # for once, so the ceiling only needs to be high enough to never sever
+        # an object. Observed replies ran to 1,894 tokens.
+        max_tokens: int = 2048,
         thinking: bool = False,
         reasoning_style: str = "chat_template",
         timeout: float = 180.0,

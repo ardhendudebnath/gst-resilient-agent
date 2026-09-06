@@ -127,11 +127,63 @@ def test_an_unparseable_reply_is_resent_verbatim():
     assert "PROTOCOL ERROR" in history
 
 
-def test_the_client_reply_cap_is_sized_for_the_protocol():
-    """One JSON action is about 150 tokens; 2048 invited 1,900-token replies
-    that were then resent on every later turn."""
-    model = OpenAICompatModel.__new__(OpenAICompatModel)
+def test_the_reply_cap_is_high_enough_to_never_sever_an_object():
+    """768 was tried and was a regression: the model writes long `thought`
+    fields, the cap truncated replies at exactly 768 tokens, and truncated JSON
+    does not parse — six unparseable replies in a four-run smoke check.
+
+    Compaction, not the cap, is what fixes the compounding cost: a verbose
+    reply is now paid for once instead of on every later turn. So the ceiling
+    only has to be high enough never to cut an object in half. Observed replies
+    reached 1,894 tokens.
+    """
     import inspect
 
     default = inspect.signature(OpenAICompatModel.__init__).parameters["max_tokens"].default
-    assert default == 768, "reply cap moved without the design note moving"
+    assert default >= 2048, "a cap this low severs the payload; see the docstring"
+
+
+def test_a_truncated_reply_is_reported_as_truncation_not_as_bad_json():
+    """One is fixed by raising a limit, the other by changing a prompt.
+    Counting them together is how a config bug gets blamed on the model."""
+    from agent.llm import Completion
+
+    class Truncating:
+        provider = "t"
+        model = "t"
+
+        def __init__(self):
+            self.calls = []
+
+        def complete(self, system, messages):
+            self.calls.append((system, list(messages)))
+            return Completion(
+                text='{"thought": "I will begin by considering',  # cut mid-object
+                model="t",
+                provider="t",
+                tokens_out=2048,
+                stop_reason="length",
+            )
+
+    tracer = Tracer(memory_only=True)
+    result = run_task(
+        LINE,
+        model=Truncating(),
+        dispatcher=build_registry(),
+        policy=Policy.baseline(),
+        tracer=tracer,
+        system_prompt="SYSTEM",
+    )
+    notes = [e for e in tracer.events if e["event"] == "note"]
+    assert any(e.get("truncated") for e in notes), "truncation was not identified"
+    assert any("token limit" in e.get("note", "") for e in notes)
+    assert result.terminal == "budget_exhausted"
+
+
+def test_the_prompt_asks_for_a_short_thought():
+    """The cap cannot be the only thing keeping replies short, because a cap
+    that bites truncates rather than shortens."""
+    from agent.loop import build_system_prompt
+
+    prompt = build_system_prompt(build_registry())
+    assert "single short sentence" in prompt
