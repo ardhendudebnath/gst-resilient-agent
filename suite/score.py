@@ -109,6 +109,25 @@ class Score:
     justification_source: str | None = None
     chaos_perturbations: int = 0
 
+    #: What the recovery policy did on this run, or None when it was off.
+    #: Without this the results file could not say whether a hardened suite
+    #: improved because it reasoned better or because it silently retried, and
+    #: those are different claims. The chaos ladder was run once without it and
+    #: the +10.8 points could not be attributed to a mechanism.
+    recovery_retries: int = 0
+    recovery_actions: dict[str, int] = field(default_factory=dict)
+
+    #: Which chaos modes actually fired on THIS scenario. A failure is only
+    #: attributable to an injected mode if the mode is recorded next to it —
+    #: an aggregate over the suite cannot say which run met what.
+    chaos_modes: dict[str, int] = field(default_factory=dict)
+
+    #: False if a tool returned different data for identical arguments under
+    #: the `duplicate` mode. None when the mode never fired. The brief predicts
+    #: double-counting as the week-5 failure; this is the field that would show
+    #: it, and a suite that never records it cannot claim the failure is absent.
+    idempotency_held: bool | None = None
+
     def to_json(self) -> dict[str, Any]:
         return {
             "scenario_id": self.scenario_id,
@@ -140,16 +159,31 @@ class Score:
             "parse_retries": self.parse_retries,
             "justification_source": self.justification_source,
             "chaos_perturbations": self.chaos_perturbations,
+            "recovery_retries": self.recovery_retries,
+            "recovery_actions": dict(self.recovery_actions),
+            "chaos_modes": dict(self.chaos_modes),
+            "idempotency_held": self.idempotency_held,
         }
 
 
 def score_run(
-    scenario: Scenario, result: dict[str, Any], *, chaos_perturbations: int = 0
+    scenario: Scenario,
+    result: dict[str, Any],
+    *,
+    chaos_perturbations: int = 0,
+    chaos_report: dict[str, Any] | None = None,
 ) -> Score:
-    """Grade one finished run against its scenario."""
+    """Grade one finished run against its scenario.
+
+    `chaos_report` is the per-scenario `ChaosReport.to_json()`. Taken whole
+    rather than as a single count, because a failure is only attributable to an
+    injected mode if the mode is recorded beside it.
+    """
     opinion = result.get("opinion") or {}
     terminal = str(result.get("terminal") or "")
     ledger = result.get("ledger") or {}
+    recovery = result.get("recovery") or {}
+    chaos_report = chaos_report or {}
 
     s = Score(
         scenario_id=scenario.id,
@@ -165,7 +199,20 @@ def score_run(
         model_retries=int(result.get("model_retries") or 0),
         parse_retries=int(result.get("parse_retries") or 0),
         justification_source=result.get("justification_source"),
-        chaos_perturbations=chaos_perturbations,
+        chaos_perturbations=chaos_perturbations or int(
+            chaos_report.get("perturbed_calls") or 0
+        ),
+        recovery_retries=int(recovery.get("retries") or 0),
+        recovery_actions=dict(recovery.get("by_action") or {}),
+        chaos_modes=dict(chaos_report.get("by_mode") or {}),
+        # None, not False, when `duplicate` never fired: "no disagreement was
+        # observed" and "no check was made" are different statements and only
+        # one of them supports a claim.
+        idempotency_held=(
+            bool(chaos_report.get("idempotency_held"))
+            if chaos_report.get("duplicate_checks")
+            else None
+        ),
         expected={
             "terminal": scenario.expect_terminal,
             "hsn4": scenario.expect_hsn4,
@@ -298,6 +345,14 @@ def _rate(numerator: int, denominator: int) -> float:
     return round(numerator / denominator, 4) if denominator else 0.0
 
 
+def _merge_counts(dicts: Any) -> dict[str, int]:
+    merged: dict[str, int] = {}
+    for d in dicts:
+        for key, value in (d or {}).items():
+            merged[key] = merged.get(key, 0) + int(value)
+    return dict(sorted(merged.items(), key=lambda kv: -kv[1]))
+
+
 def _bucket(scores: list[Score]) -> dict[str, Any]:
     n = len(scores)
     if not n:
@@ -331,6 +386,24 @@ def _bucket(scores: list[Score]) -> dict[str, Any]:
         "parse_retries": sum(s.parse_retries for s in scores),
         "templated_justifications": sum(
             1 for s in scores if s.justification_source == "template"
+        ),
+        # -- what chaos and recovery actually did -------------------------
+        "chaos_perturbations": sum(s.chaos_perturbations for s in scores),
+        "chaos_by_mode": _merge_counts(s.chaos_modes for s in scores),
+        "recovery_retries": sum(s.recovery_retries for s in scores),
+        "recovery_by_action": _merge_counts(s.recovery_actions for s in scores),
+        # Three-valued on purpose. True means the duplicate mode fired and
+        # every repeated call agreed; False means a tool returned different
+        # data for identical arguments, which is the failure the brief predicts
+        # and would be a finding; None means the check never ran, which is not
+        # evidence of anything.
+        "idempotency_held": (
+            None
+            if all(s.idempotency_held is None for s in scores)
+            else all(s.idempotency_held is not False for s in scores)
+        ),
+        "idempotency_checks": sum(
+            1 for s in scores if s.idempotency_held is not None
         ),
     }
 

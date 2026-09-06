@@ -155,8 +155,14 @@ def run_suite(
                 tracer=tracer,
                 system_prompt=system_prompt,
             )
-        perturbed = chaos_dispatcher.report.perturbed_calls if chaos_dispatcher else 0
-        return score_run(scenario, result.to_json(), chaos_perturbations=perturbed)
+        # The whole report, not just a count. Which modes fired on which
+        # scenario is what makes a failure attributable to an injected mode,
+        # and `idempotency_held` is the field that would show the
+        # double-counting failure the brief predicts. An earlier version kept
+        # only `perturbed_calls`, and a full chaos ladder had to be read
+        # without being able to say what caused what.
+        report = chaos_dispatcher.report.to_json() if chaos_dispatcher else None
+        return score_run(scenario, result.to_json(), chaos_report=report)
 
     if concurrency <= 1:
         for i, scenario in enumerate(tasks, 1):
@@ -259,6 +265,24 @@ def _print_summary(run: SuiteRun) -> None:
         f"{b['parse_retries']} unparseable reply(s), "
         f"{b['templated_justifications']} templated justification(s)"
     )
+
+    if b["chaos_perturbations"]:
+        fired = ", ".join(f"{k}x{v}" for k, v in b["chaos_by_mode"].items())
+        print(f"chaos:     {b['chaos_perturbations']} perturbation(s) — {fired}")
+        held = b["idempotency_held"]
+        verdict = (
+            "not checked" if held is None
+            else "HELD" if held
+            else "*** BROKEN — a tool returned different data for identical arguments ***"
+        )
+        print(f"           idempotency {verdict} over {b['idempotency_checks']} run(s)")
+
+    if b["recovery_retries"] or b["recovery_by_action"]:
+        actions = ", ".join(f"{k}x{v}" for k, v in b["recovery_by_action"].items() if v)
+        print(
+            f"recovery:  {b['recovery_retries']} retry(s) without a model turn"
+            + (f" — {actions}" if actions else "")
+        )
     if b["chapter_only_credit"]:
         print(
             f"partial credit (right chapter, wrong heading): "
