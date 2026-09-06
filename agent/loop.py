@@ -56,6 +56,7 @@ from agent.llm import (
     is_transient,
 )
 from agent.policy import Policy
+from agent.recovery import ABORT, RETRY, RecoveryPolicy
 from agent.registry import IdempotencyCache, Registry, build_call
 from agent.render import render_line_item, render_tool_result
 from agent.trace import Tracer
@@ -391,6 +392,10 @@ class RunResult:
     #: call failed; the run is still valid but its prose is not the model's,
     #: and anything scoring the prose has to be able to exclude it.
     justification_source: str | None = None
+    #: What the recovery policy did, or None when it was off. Reported so a
+    #: hardened run's numbers can be attributed: a suite that improved because
+    #: it silently retried is a different result from one that reasoned better.
+    recovery: dict[str, Any] | None = None
 
     @property
     def finished(self) -> bool:
@@ -412,6 +417,7 @@ class RunResult:
             "model_retries": self.model_retries,
             "parse_retries": self.parse_retries,
             "justification_source": self.justification_source,
+            "recovery": self.recovery,
         }
 
 
@@ -428,6 +434,7 @@ def run_task(
     """Audit one invoice line. Returns a terminal state; never raises for
     anything the model or a tool did."""
     policy = policy or Policy.baseline()
+    recovery = RecoveryPolicy() if policy.recovery_policies else None
     ledger = Ledger(budget=budget or Budget())
     cache = IdempotencyCache()
     state = RunState()
@@ -491,6 +498,7 @@ def run_task(
             model_retries=model_errors,
             parse_retries=parse_retries,
             justification_source=justification_source,
+            recovery=recovery.to_json() if recovery else None,
         )
         if owns_tracer:
             tracer.close()
@@ -596,22 +604,59 @@ def run_task(
 
         call = build_call(action.tool, action.arguments, step=step)
         result = dispatcher.invoke(call, ledger=ledger, tracer=tracer, cache=cache)
+
+        # --- recovery (a defence; off in the baseline) --------------------
+        # A failed call is handled by class rather than by handing every
+        # failure to the model. A transient error is re-issued here, without a
+        # model turn: routing a timeout through the model spends an iteration
+        # and a few thousand tokens of resent history to reach the decision the
+        # error code already implied.
+        advice = ""
+        if recovery is not None and not result.ok:
+            while True:
+                decision = recovery.decide(call.key, result)
+                tracer.emit(
+                    "policy",
+                    step=step,
+                    policy="recovery",
+                    tool=action.tool,
+                    error=result.error,
+                    **decision.to_json(),
+                )
+                if decision.action != RETRY:
+                    advice = decision.guidance
+                    if decision.action == ABORT:
+                        # Nothing downstream can be trusted. Reported with the
+                        # tool error rather than as a generic failure.
+                        terminal = "budget_exhausted"
+                        reason = f"aborted: {result.error}: {decision.reason}"
+                        state.calls.append((action.tool, result))
+                        return finish()
+                    break
+                if decision.backoff:
+                    time.sleep(backoff_delay(recovery.attempts.get((call.key, result.error or ""), 1)))
+                # Re-issued as a *new* invocation: a fresh call_id, the same
+                # idempotency key. The ledger charges it, so the per-tool cap
+                # still bounds a policy that would otherwise retry forever.
+                call = build_call(action.tool, action.arguments, step=step)
+                result = dispatcher.invoke(
+                    call, ledger=ledger, tracer=tracer, cache=cache
+                )
+                if result.ok:
+                    break
+
         state.calls.append((action.tool, result))
 
         # The chaos label is trace-only; the renderer asserts on it. Stripping
         # it here, in the one place a result crosses into the message history,
         # is what keeps that assertion from being a nuisance at every call site.
         visible = result if result.chaos is None else result.with_chaos(None)
-        messages.append(
-            Message(
-                "user",
-                render_tool_result(
-                    action.tool,
-                    visible,
-                    quarantine_evidence=policy.quarantine_evidence,
-                ),
-            )
+        rendered = render_tool_result(
+            action.tool, visible, quarantine_evidence=policy.quarantine_evidence
         )
+        if advice:
+            rendered += f"\n\nRECOVERY: {advice}"
+        messages.append(Message("user", rendered))
 
         if action.tool == "draft_opinion" and result.ok:
             opinion = result.data.get("opinion")

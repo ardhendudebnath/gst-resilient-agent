@@ -53,11 +53,12 @@ class Policy:
     max_parse_retries: int = 2
 
     def __post_init__(self) -> None:
-        unbuilt = [
-            name
-            for name in ("check_pass", "recovery_policies")
-            if getattr(self, name)
-        ]
+        # `recovery_policies` left this list on 2026-09-06, when
+        # `agent/recovery.py` was implemented. `check_pass` is still declared
+        # and still unbuilt, and still raises rather than quietly doing
+        # nothing — a flag that reports a defence as active while nothing
+        # happens would flatter the after-fix numbers.
+        unbuilt = [name for name in ("check_pass",) if getattr(self, name)]
         if unbuilt:
             raise PolicyNotImplemented(
                 f"{', '.join(unbuilt)} is not implemented yet. Enabling it would "
@@ -73,7 +74,11 @@ class Policy:
     @classmethod
     def hardened(cls) -> "Policy":
         """Every defence that exists, on."""
-        return cls(quarantine_evidence=True, stage_allowlist=True)
+        return cls(
+            quarantine_evidence=True,
+            stage_allowlist=True,
+            recovery_policies=True,
+        )
 
     def with_(self, **changes: Any) -> "Policy":
         return replace(self, **changes)

@@ -383,11 +383,15 @@ def test_check_conditions_requires_an_ambiguous_lookup():
 
 def test_unbuilt_defences_refuse_to_be_switched_on():
     """A flag that reports a defence as active while doing nothing would
-    flatter the after-fix numbers, which is the one direction that matters."""
+    flatter the after-fix numbers, which is the one direction that matters.
+
+    `recovery_policies` left this list on 2026-09-06 when agent/recovery.py was
+    built. `check_pass` has not been built and still raises.
+    """
     with pytest.raises(PolicyNotImplemented):
         Policy(check_pass=True)
-    with pytest.raises(PolicyNotImplemented):
-        Policy(recovery_policies=True)
+    # Built, so it must now be accepted rather than refused.
+    assert Policy(recovery_policies=True).recovery_policies is True
 
 
 def test_policy_names_itself_for_the_results_file():
