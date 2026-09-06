@@ -242,7 +242,14 @@ class OpenAICompatModel:
         model: str | None = None,
         *,
         provider: str = "nvidia",
-        max_tokens: int = 2048,
+        # The action protocol is one JSON object: a thought, a tool name and a
+        # few arguments, which is about 150 tokens and rarely over 400 even
+        # when `draft_opinion` carries citations and notes. 2048 was the
+        # original ceiling and the model used 1,000-1,900 of it on early turns,
+        # every one of which was then resent on every later turn. Capping the
+        # reply is the cheaper half of that fix; `agent.loop.compact_action` is
+        # the other half.
+        max_tokens: int = 768,
         thinking: bool = False,
         reasoning_style: str = "chat_template",
         timeout: float = 180.0,

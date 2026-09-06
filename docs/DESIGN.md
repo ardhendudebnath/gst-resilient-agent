@@ -379,3 +379,56 @@ actually prevents an overnight bill.
 **Recorded, not hidden:** every published run states the budget it ran under,
 so a figure produced at 120 s and one produced at 600 s can never be compared
 by accident.
+
+### 2026-09-06 — max tokens per run raised from 60 000 to 150 000
+
+**What happened.** In the same baseline, **7 of 14 derived-scenario failures
+were `max_tokens`** — the largest single failure class, ahead of wrong answers
+by seven to one.
+
+**Why the bound was wrong.** Decomposing a real run:
+
+| | tokens | resent each turn |
+|---|---:|---|
+| system prompt | 2 673 | yes — 2 416 of it is the seven tool schemas |
+| a long-context invoice line | 1 997 | yes |
+| **floor at 7 turns** | **32 690** | before any tool result or model reply |
+
+Cumulative billed tokens is what a provider charges: every turn pays for the
+whole history again. So more than half of 60 000 was spent before the agent did
+anything, and a seven-turn run on a long advance-ruling excerpt could not
+finish inside it however well it reasoned. 60 000 was set in week 1 against no
+measured prompt.
+
+**What was tried first, and what it was worth.** Two genuine inefficiencies
+were found and fixed before touching the number, because moving a bound is the
+last resort rather than the first:
+
+- the model spent 1 000–1 900 tokens on replies whose payload needs about 150,
+  and every one was resent on every later turn — `max_tokens` on the client
+  dropped 2048 → 768;
+- the raw reply was stored in the history rather than the parsed action —
+  `agent.loop.compact_action` now stores the action.
+
+Replaying the 65 recorded runs, those two together save **4 %** of billed
+tokens and rescue **2 of 10** over-budget runs. Real, kept, and nowhere near
+enough. The remainder is the floor above, which is irreducible without changing
+what the agent is given.
+
+**What was deliberately not done.** The tool schemas are 2 416 tokens and the
+obvious saving. They are left alone: their text carries the behaviour the
+design depends on — "this tool will NOT choose", "decline rather than inferring
+one" — and trimming it would change what is being measured rather than make it
+cheaper. If it is ever trimmed, that is a change to the agent and needs its own
+before/after.
+
+**What changes.** `max_tokens` 60 000 → 150 000. Iterations (12) and tool calls
+(20) remain the bounds that describe agent behaviour; this one bounds spend.
+A 12-turn run floors around 56 000, so 150 000 leaves headroom for tool results
+and replies while still stopping a runaway.
+
+**What this costs, and what is not known.** Up to 2.5× the tokens per run.
+NVIDIA's price for `nemotron-3-ultra-550b-a55b` has not been read and dated, so
+the rupee cost of that is genuinely unknown rather than estimated — the same
+discipline Project 01 applies to its empty cost column. `MAX_RUN_USD` and the
+45-minute suite stop are unchanged and remain what actually prevents a bill.

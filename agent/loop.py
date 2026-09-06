@@ -65,6 +65,41 @@ from agent.trace import Tracer
 #: wall-clock bound is what actually stops a run against a dead endpoint.
 MAX_MODEL_RETRIES = 5
 
+#: Longest `thought` kept in the message history. The full text always reaches
+#: the trace; this bounds only what is *resent*.
+#:
+#: Measured, not guessed. In the first baseline the model spent 1,000-1,900
+#: tokens on replies whose payload is a JSON object needing about 150, and
+#: because every assistant message is resent on every later turn, one verbose
+#: reply was still being paid for six turns later: a 1,894-token step was
+#: followed by an input that grew by 2,073. Seven of fourteen derived-scenario
+#: failures were `max_tokens`, and this is most of why.
+MAX_THOUGHT_CHARS = 300
+
+
+def compact_action(action: "Action", *, limit: int = MAX_THOUGHT_CHARS) -> str:
+    """The assistant turn as it goes into the history: the action, nothing else.
+
+    The model's raw reply is kept in full in the trace, where diagnosis needs
+    it. What re-enters the conversation is the canonical action — which is
+    everything the next turn actually needs, because the tool result that
+    follows carries the outcome.
+
+    This is a bug fix rather than a defence, so it is not behind a policy flag:
+    an ordinary careful engineer does not resend a model's 1,900-token preamble
+    on every subsequent turn, and `docs/DESIGN.md` §6 defines the baseline as
+    what such an engineer writes.
+    """
+    thought = (action.thought or "").strip()
+    if len(thought) > limit:
+        thought = thought[: limit - 1].rstrip() + "…"
+    return json.dumps(
+        {"thought": thought, "tool": action.tool, "arguments": action.arguments},
+        ensure_ascii=False,
+        separators=(",", ":"),
+        default=str,
+    )
+
 # Re-exported so the loop's own retry policy reads in one place. The schedule
 # itself lives beside `is_transient` in agent/llm.py, because tool 7 retries on
 # the same terms and two backoff schedules would drift.
@@ -519,7 +554,16 @@ def run_task(
         ledger.note_iteration()
 
         action, problem = parse_action(completion.text)
-        messages.append(Message("assistant", completion.text))
+
+        # An unparseable reply goes back verbatim, because the correction that
+        # follows refers to it and the model needs to see what it actually
+        # sent. A parsed one is compacted to its action: see `compact_action`.
+        messages.append(
+            Message(
+                "assistant",
+                completion.text if problem is not None else compact_action(action),
+            )
+        )
 
         if problem is not None:
             parse_retries += 1

@@ -47,7 +47,15 @@ class Budget:
     max_iterations: int = 12
     max_tool_calls: int = 20
     max_calls_per_tool: int = 4
-    max_tokens: int = 60_000
+    #: Raised from 60 000 on 2026-09-06. Cumulative *billed* tokens: every turn
+    #: pays for the whole history again, so a run's floor is
+    #: (system prompt + invoice line) x turns. Measured at 2 673 + 1 997 tokens,
+    #: a seven-turn long-context run spends 32 690 before any tool result or
+    #: model reply — over half the old bound, unreachable however well it
+    #: reasons. It was the largest failure class in the first baseline: 7 of 14.
+    #: Two real inefficiencies were fixed first and were worth 4 %. See
+    #: docs/DESIGN.md §11.
+    max_tokens: int = 150_000
     #: Raised from 120 s on 2026-09-06. The original bounded the *provider*
     #: rather than the agent: the first full baseline run ended
     #: `budget_exhausted` on 15 of 15 derived scenarios, every one on this

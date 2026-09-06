@@ -14,12 +14,20 @@ def test_defaults_match_the_pinned_design():
     the assertion is here rather than in a comment.
     """
     b = Budget()
+    # These three describe the agent and have never moved.
     assert (b.max_iterations, b.max_tool_calls, b.max_calls_per_tool) == (12, 20, 4)
-    assert b.max_tokens == 60_000
-    # Was 120 s. Raised because it bounded the provider rather than the agent:
-    # the first full baseline ended budget_exhausted on 15 of 15 derived
-    # scenarios, all on this bound, while iterations and tokens never tripped.
+
+    # Both of the bounds that HAVE moved bounded the environment rather than
+    # the agent, and both were caught by this assertion before the number
+    # changed. See docs/DESIGN.md §11 for the measurements.
+    #
+    # 120 s -> 600 s: the first baseline ended budget_exhausted on 15 of 15
+    # derived scenarios, all on the wall clock, while iterations never tripped.
     assert b.max_wall_clock_s == 600.0
+    # 60k -> 150k: cumulative billed tokens. A seven-turn long-context run
+    # spends 32,690 on the system prompt and invoice line alone, before any
+    # tool result — over half the old bound.
+    assert b.max_tokens == 150_000
 
 
 def test_a_fresh_ledger_is_within_budget():
